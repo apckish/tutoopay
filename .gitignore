@@ -1,0 +1,20 @@
+# Secrets
+api/config.php
+error_log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Backups
+*.bak
+
+# Sessions
+admin_sessions/
+
+# Well-known (ACME/SSL)
+.well-known/
