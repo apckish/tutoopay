@@ -13,6 +13,16 @@ $exchange_fee = isset($body['exchange_fee']) ? floatval($body['exchange_fee']) :
 $wallet_address = trim($body['wallet_address'] ?? '');
 $chain = $body['chain'] ?? 'TRC20';
 if (!in_array($chain, ['TRC20', 'BSC'])) $chain = 'TRC20';
+$manual = !empty($body['manual']);
+$description = trim($body['description'] ?? '');
+
+if ($manual) {
+    // Manual settlement (no CoinEx): no exchange fee, description required.
+    $exchange_fee = 0.0;
+    if (!$description) {
+        json_error('Description is required for manual payment');
+    }
+}
 
 if (!$user_id) {
     json_error('user_id is required');
@@ -41,7 +51,7 @@ if (!$user) {
 
 $commission_pct = floatval($user['commission_pct'] ?? 20);
 $user_wallet = $wallet_address ?: ($user['wallet_address'] ?? '');
-if (!$user_wallet) {
+if (!$user_wallet && !$manual) {
     $db->close();
     json_error('No wallet address available');
 }
@@ -114,6 +124,61 @@ $total_deductions = round($total_deductions, 2);
 $commission_amount = round($total_approved_usd * ($commission_pct / 100), 2);
 $payout_amount = round($total_approved_usd - $commission_amount - $exchange_fee - $total_deductions, 2);
 
+$admin_user = $_SESSION['admin_username'] ?? 'admin';
+$group_id = 'grp_' . time() . '_' . $user_id;
+$user_name = $user['full_name'] ?? '';
+$user_email = $user['email'] ?? '';
+
+if ($manual) {
+    // Manual settlement — no CoinEx. Mark the selected approved claims paid + grouped
+    // so they no longer reappear in Approved & Pay, exactly like a CoinEx payout did.
+    $withdraw_id = 'manual';
+    $note = 'manual: ' . $description;
+
+    $paid_placeholders = implode(',', array_fill(0, count($valid_payment_ids), '?'));
+    $paid_types = str_repeat('i', count($valid_payment_ids));
+    $paid_stmt = $db->prepare("UPDATE payments SET paid_status = 'paid', payout_group_id = '$group_id', coinex_withdraw_id = ?, usdt_amount = ? WHERE id IN ($paid_placeholders)");
+    $paid_bind = array_merge([$withdraw_id, $payout_amount], $valid_payment_ids);
+    $paid_bind_types = 'sd' . $paid_types;
+    $paid_stmt->bind_param($paid_bind_types, ...$paid_bind);
+    $paid_stmt->execute();
+    $paid_stmt->close();
+
+    // Consume any selected prior manual/direct payment logs so they stop showing as Prior Payouts.
+    if (!empty($valid_deduction_ids)) {
+        $ded_placeholders = implode(',', array_fill(0, count($valid_deduction_ids), '?'));
+        $ded_types = str_repeat('i', count($valid_deduction_ids));
+        $ded_stmt = $db->prepare("UPDATE payment_logs SET payout_group_id = '$group_id' WHERE id IN ($ded_placeholders)");
+        $ded_stmt->bind_param($ded_types, ...$valid_deduction_ids);
+        $ded_stmt->execute();
+        $ded_stmt->close();
+    }
+
+    // Log the manual settlement.
+    $log_stmt = $db->prepare("INSERT INTO payment_logs (payment_id, user_id, user_name, user_email, wallet_address, usdt_amount, statement_id, statement_tx_id, statement_source, coinex_withdraw_id, action, admin_user, payout_group_id) VALUES (0, ?, ?, ?, ?, ?, 0, ?, 'manual', ?, 'multi_payout', ?, ?)");
+    $payment_ids_str = implode(',', $valid_payment_ids);
+    $log_stmt->bind_param("isssdssss", $user_id, $user_name, $user_email, $user_wallet, $payout_amount, $payment_ids_str, $note, $admin_user, $group_id);
+    $log_stmt->execute();
+    $log_stmt->close();
+
+    $db->close();
+    json_response([
+        'success' => true,
+        'message' => 'Manual payment settled (' . count($valid_payment_ids) . ' claim(s) marked paid)',
+        'manual' => true,
+        'group_id' => $group_id,
+        'description' => $description,
+        'total_approved' => $total_approved_usd,
+        'commission_pct' => $commission_pct,
+        'commission_amount' => $commission_amount,
+        'total_deductions' => $total_deductions,
+        'payout_amount' => $payout_amount,
+        'payments_count' => count($valid_payment_ids),
+        'deductions_count' => count($valid_deduction_ids),
+    ]);
+    exit;
+}
+
 if ($payout_amount <= 0) {
     $db->close();
     json_error("Payout amount is $payout_amount after deductions. Nothing to send.");
@@ -135,9 +200,6 @@ $result_api = coinex_request('POST', '/v2/assets/withdraw', [
     'amount' => strval($payout_amount),
     'withdraw_method' => 'on_chain',
 ]);
-
-$admin_user = $_SESSION['admin_username'] ?? 'admin';
-$group_id = 'grp_' . time() . '_' . $user_id;
 
 if (isset($result_api['code']) && $result_api['code'] == 0) {
     $withdraw_id = strval($result_api['data']['withdraw_id'] ?? '');

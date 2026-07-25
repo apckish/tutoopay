@@ -35,6 +35,31 @@ if ($payment['status'] === 'Approved') {
     json_error('Payment already approved');
 }
 
+// Guard: a bank statement / transaction can only ever back ONE approved claim.
+// Prevents the same money being paid to two payments (double payout).
+if ($statement_id > 0) {
+    $chk = $db->prepare("SELECT id, status, matched_payment_id FROM statements WHERE id = ?");
+    $chk->bind_param("i", $statement_id);
+    $chk->execute();
+    $st = $chk->get_result()->fetch_assoc();
+    $chk->close();
+    if ($st && $st['status'] === 'matched' && intval($st['matched_payment_id']) !== $payment_id) {
+        $db->close();
+        json_error('This statement is already matched to payment #' . intval($st['matched_payment_id']) . '. A statement can only back one payment.', 409);
+    }
+}
+if ($tx_id !== '' && $tx_id !== null && $tx_id !== 'manual_approve') {
+    $chk = $db->prepare("SELECT id FROM payments WHERE matched_tx_id = ? AND status = 'Approved' AND id != ? LIMIT 1");
+    $chk->bind_param("si", $tx_id, $payment_id);
+    $chk->execute();
+    $dup = $chk->get_result()->fetch_assoc();
+    $chk->close();
+    if ($dup) {
+        $db->close();
+        json_error('Transaction ' . $tx_id . ' is already matched to approved payment #' . intval($dup['id']) . '. A transaction can only be paid once.', 409);
+    }
+}
+
 // If approved_amount provided (e.g. PayPal net), update payment amount to the net value
 if ($approved_amount !== null && $approved_amount > 0) {
     $stmt = $db->prepare("UPDATE payments SET status = 'Approved', matched_tx_id = ?, amount = ? WHERE id = ?");
@@ -84,8 +109,8 @@ $pay_currency = $payment['currency'] ?? 'USD';
 $html_body = '
 <!DOCTYPE html>
 <html>
-<head>
-<meta charset="utf-8">
+<head><meta charset="utf-8">
+
 <style>
   body { font-family: Arial, Helvetica, sans-serif; background: #f4f4f7; margin: 0; padding: 0; }
   .container { max-width: 600px; margin: 40px auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
