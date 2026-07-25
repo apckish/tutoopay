@@ -62,6 +62,23 @@ $wallet = $user['wallet_address'] ?? '';
 $admin_user = $_SESSION['admin_username'] ?? 'admin';
 $empty_withdraw = '';
 
+// Guard: a transaction can only ever back ONE approved claim.
+if ($tx_id !== '' && $tx_id !== null && $tx_id !== 'manual_approve') {
+    $chk = $db->prepare("SELECT id FROM payments WHERE matched_tx_id = ? AND status = 'Approved'" . ($payment_id_link > 0 ? " AND id != ?" : "") . " LIMIT 1");
+    if ($payment_id_link > 0) {
+        $chk->bind_param("si", $tx_id, $payment_id_link);
+    } else {
+        $chk->bind_param("s", $tx_id);
+    }
+    $chk->execute();
+    $dup = $chk->get_result()->fetch_assoc();
+    $chk->close();
+    if ($dup) {
+        $db->close();
+        json_error('Transaction ' . $tx_id . ' is already matched to approved payment #' . intval($dup['id']) . '. A transaction can only be paid once.', 409);
+    }
+}
+
 if ($payment_id_link > 0) {
     // Link to an existing payment record
     $stmt = $db->prepare("SELECT id, user_id, status FROM payments WHERE id = ? AND user_id = ?");

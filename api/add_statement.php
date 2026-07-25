@@ -42,6 +42,18 @@ $subject = '';
 
 $db = get_db();
 
+// If a custom tx_id is provided and it already exists for this source, append a unique suffix
+if ($custom_tx_id) {
+    $check = $db->prepare("SELECT COUNT(*) as cnt FROM statements WHERE source = ? AND tx_id = ?");
+    $check->bind_param("ss", $source, $tx_id);
+    $check->execute();
+    $result = $check->get_result()->fetch_assoc();
+    $check->close();
+    if ($result['cnt'] > 0) {
+        $tx_id = $custom_tx_id . '_' . date('Ymd_His') . '_' . substr(uniqid(), -5);
+    }
+}
+
 $stmt = $db->prepare("INSERT INTO statements (source, tx_date, tx_time, name, from_email, tx_type, currency, gross, fee, net, tx_id, note, subject, status)
                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unmatched')");
 $stmt->bind_param("sssssssdddsss",

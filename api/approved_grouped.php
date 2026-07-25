@@ -5,7 +5,7 @@ $db = get_db();
 
 // Get all approved + unpaid payments grouped by user, with matched statement amounts
 $query = "SELECT p.id, p.user_id, p.amount, p.currency, p.payment_method, p.sender_name, p.date, p.transfer_date, p.status, p.paid_status, p.matched_tx_id, p.wallet_address as payment_wallet, p.receipt_url,
-          u.full_name as user_name, u.email as user_email, u.wallet_address as user_wallet_address, u.wallet_name, u.whitelisted, u.commission_pct,
+          u.full_name as user_name, u.email as user_email, u.wallet_address as user_wallet_address, u.wallet_name, u.wallet_qr_url, u.whitelisted, u.commission_pct,
           s.gross as stmt_gross, s.net as stmt_net, s.currency as stmt_currency
           FROM payments p JOIN users u ON p.user_id = u.id 
           LEFT JOIN statements s ON s.matched_payment_id = p.id
@@ -52,6 +52,7 @@ while ($row = $result->fetch_assoc()) {
             'user_email' => $row['user_email'],
             'user_wallet_address' => $row['user_wallet_address'] ?? '',
             'wallet_name' => $row['wallet_name'] ?? '',
+            'wallet_qr_url' => $row['wallet_qr_url'] ?? '',
             'whitelisted' => $row['whitelisted'],
             'commission_pct' => $row['commission_pct'],
             'payments' => [],
@@ -77,7 +78,7 @@ while ($row = $log_result->fetch_assoc()) {
     if (!isset($payments_by_user[$uid])) {
         // User has admin/direct paid but no approved payments - still show them
         // Look up user info
-        $u_stmt = $db->prepare("SELECT full_name, email, wallet_address, wallet_name, whitelisted, commission_pct FROM users WHERE id = ?");
+        $u_stmt = $db->prepare("SELECT full_name, email, wallet_address, wallet_name, wallet_qr_url, whitelisted, commission_pct FROM users WHERE id = ?");
         $u_stmt->bind_param("i", $uid);
         $u_stmt->execute();
         $u_row = $u_stmt->get_result()->fetch_assoc();
@@ -89,6 +90,7 @@ while ($row = $log_result->fetch_assoc()) {
             'user_email' => $u_row['email'] ?? $row['user_email'],
             'user_wallet_address' => $u_row['wallet_address'] ?? '',
             'wallet_name' => $u_row['wallet_name'] ?? '',
+            'wallet_qr_url' => $u_row['wallet_qr_url'] ?? '',
             'whitelisted' => intval($u_row['whitelisted'] ?? 0),
             'commission_pct' => floatval($u_row['commission_pct'] ?? 20),
             'payments' => [],
