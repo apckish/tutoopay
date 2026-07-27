@@ -586,12 +586,18 @@
     });
   }
 
-  // Mark ALL of a user's approved claims as paid manually (settlement, no CoinEx).
+  // Mark the TICKED approved claims as paid manually (settlement, no CoinEx).
   function markPaidTrust(email, btn) {
     var key = email.toLowerCase();
-    var pays = paymentsByEmail[key] || [];
-    var paymentIds = pays.map(function(p) { return p.id; });
-    if (!paymentIds.length) { alert('No approved claims to settle for this user.'); return; }
+    var box = btn.closest ? btn.closest('.claim-revert-box') : null;
+    var paymentIds = [];
+    if (box) {
+      var cbs = box.querySelectorAll('.trust-claim-cb');
+      for (var i = 0; i < cbs.length; i++) {
+        if (cbs[i].checked) paymentIds.push(parseInt(cbs[i].getAttribute('data-pid'), 10));
+      }
+    }
+    if (!paymentIds.length) { alert('Tick at least one claim to mark paid.'); return; }
     var userId = userIdCache[key];
     if (!userId) { alert('User not found: ' + email); return; }
 
@@ -601,7 +607,7 @@
       return /trust/i.test(String(l.coinex_withdraw_id || '')) && !l.payout_group_id;
     }).map(function(l) { return l.id; });
 
-    var msg = 'Mark ' + paymentIds.length + ' approved claim(s) as PAID (manual, description "TRUST") for ' + email + '?';
+    var msg = 'Mark ' + paymentIds.length + ' TICKED approved claim(s) as PAID (manual, description "TRUST") for ' + email + '?';
     if (dedIds.length) msg += '\n\nThis will also clear ' + dedIds.length + ' prior TRUST payout record(s).';
     msg += '\n\nThese claims will be considered paid and will no longer appear in Approved & Pay.';
     if (!confirm(msg)) return;
@@ -674,7 +680,7 @@
       header.style.cssText = 'display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px;';
       var label = document.createElement('div');
       label.style.cssText = 'font-size:12px; color:#9ca3af; font-weight:600;';
-      label.textContent = 'Approved claims';
+      label.textContent = 'Approved claims (tick the ones to pay)';
 
       var payBtn = document.createElement('button');
       payBtn.className = 'mark-paid-trust-btn';
@@ -696,10 +702,21 @@
 
         var amt = (p.approved_amount !== undefined ? p.approved_amount : p.amount);
         var cur = (p.approved_currency || p.currency || 'USD');
+
+        var left = document.createElement('label');
+        left.style.cssText = 'display:flex; align-items:center; gap:8px; min-width:0; cursor:pointer;';
+        var cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.className = 'trust-claim-cb';
+        cb.checked = true;
+        cb.setAttribute('data-pid', p.id);
+        cb.style.cssText = 'width:15px; height:15px; flex-shrink:0; cursor:pointer;';
         var info = document.createElement('div');
         info.style.cssText = 'font-size:12px; color:#d1d5db; min-width:0;';
         var txPart = p.matched_tx_id ? (' · tx ' + p.matched_tx_id) : '';
         info.textContent = '#' + p.id + ' · ' + (p.payment_method || '') + ' · ' + Number(amt).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}) + ' ' + cur + txPart;
+        left.appendChild(cb);
+        left.appendChild(info);
 
         var rbtn = document.createElement('button');
         rbtn.className = 'claim-revert-btn';
@@ -711,7 +728,7 @@
           return function(e) { e.stopPropagation(); e.preventDefault(); revertClaim(pid, b); };
         })(p.id, rbtn);
 
-        row.appendChild(info);
+        row.appendChild(left);
         row.appendChild(rbtn);
         box.appendChild(row);
       });
