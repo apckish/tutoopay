@@ -190,7 +190,7 @@
   }
 
   // === Fullscreen modal for the wallet QR image ===
-  function showQrModal(url, netText) {
+  function showQrModal(url, netText, email) {
     var existing = document.getElementById('wallet-qr-modal');
     if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
 
@@ -228,6 +228,49 @@
       netEl.textContent = 'Net Payout: ' + netText;
       inner.appendChild(netEl);
     }
+
+    var amount = 0;
+    if (netText) {
+      var num = String(netText).replace(/[^0-9.\-]/g, '');
+      amount = parseFloat(num);
+      if (isNaN(amount)) amount = 0;
+    }
+
+    if (email && amount > 0) {
+      var sendBtn = document.createElement('button');
+      sendBtn.textContent = '\u2709 Send Email';
+      sendBtn.style.cssText = 'display:block; margin:12px auto 0; padding:9px 18px; border:none; border-radius:8px; background:#059669; color:#fff; font-size:14px; font-weight:600; cursor:pointer;';
+      sendBtn.onclick = function(e) {
+        e.stopPropagation();
+        if (!confirm('Send payment email to ' + email + ' for $' + amount.toFixed(2) + ' USDT?')) return;
+        sendBtn.disabled = true;
+        sendBtn.textContent = 'Sending...';
+        fetch('/api/send_transfer_email.php', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: email, amount: amount })
+        })
+          .then(function(r) { return r.json(); })
+          .then(function(d) {
+            if (d && d.success) {
+              sendBtn.textContent = '\u2714 Email sent';
+              sendBtn.style.background = '#065f46';
+            } else {
+              sendBtn.disabled = false;
+              sendBtn.textContent = '\u2709 Send Email';
+              alert('Failed to send email: ' + ((d && (d.error || d.message)) || 'unknown error'));
+            }
+          })
+          .catch(function(err) {
+            sendBtn.disabled = false;
+            sendBtn.textContent = '\u2709 Send Email';
+            alert('Failed to send email: ' + err);
+          });
+      };
+      inner.appendChild(sendBtn);
+    }
+
     inner.appendChild(closeBtn);
     overlay.appendChild(inner);
     document.body.appendChild(overlay);
@@ -539,7 +582,7 @@
           return function(e) {
             e.stopPropagation();
             e.preventDefault();
-            showQrModal(full, extractNetPayout(cardEl));
+            showQrModal(full, extractNetPayout(cardEl), emailKey);
           };
         })(card, email.toLowerCase());
         box.appendChild(label);
