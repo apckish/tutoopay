@@ -644,14 +644,15 @@
     var userId = userIdCache[key];
     if (!userId) { alert('User not found: ' + email); return; }
 
-    // Prior manual "TRUST" payouts already recorded for this user — consume them too.
+    // All ungrouped prior payouts (TRUST, CoinEx, Direct Pay) are absorbed into this settlement
+    // so no leftover negative balance remains for the user.
     var priors = adminPaidByEmail[key] || [];
     var dedIds = priors.filter(function(l) {
-      return /trust/i.test(String(l.coinex_withdraw_id || '')) && !l.payout_group_id;
+      return !l.payout_group_id;
     }).map(function(l) { return l.id; });
 
     var msg = 'Mark ' + paymentIds.length + ' TICKED approved claim(s) as PAID (manual, description "TRUST") for ' + email + '?';
-    if (dedIds.length) msg += '\n\nThis will also clear ' + dedIds.length + ' prior TRUST payout record(s).';
+    if (dedIds.length) msg += '\n\nThis will also clear ' + dedIds.length + ' prior payout record(s) so no negative balance remains.';
     msg += '\n\nThese claims will be considered paid and will no longer appear in Approved & Pay.';
     if (!confirm(msg)) return;
 
