@@ -90,15 +90,20 @@
   var cacheBuilt = false;
   var cacheBuilding = false;
   var cacheCallbacks = [];
+  var cacheTime = 0;
+  var tickState = {};
+  var approvedWasVisible = false;
 
   function buildUserIdCache(callback) {
     if (cacheBuilt) { if (callback) callback(); return; }
     if (callback) cacheCallbacks.push(callback);
     if (cacheBuilding) return;
     cacheBuilding = true;
+    var loadedOk = false;
 
     function done() {
       cacheBuilt = true;
+      cacheTime = Date.now();
       cacheBuilding = false;
       var cbs = cacheCallbacks; cacheCallbacks = [];
       cbs.forEach(function(cb) { try { cb(); } catch (e) {} });
@@ -109,6 +114,8 @@
       .then(function(data) {
         var groups = (data && data.users) ? data.users : data;
         if (Array.isArray(groups)) {
+          loadedOk = true;
+          walletQrByEmail = {}; netByEmail = {}; paymentsByEmail = {}; adminPaidByEmail = {};
           groups.forEach(function(group) {
             if (group.user_email) {
               var key = group.user_email.toLowerCase();
@@ -154,6 +161,25 @@
           })
           .catch(function() { done(); });
       });
+  }
+
+  // Rebuild the cache when an expanded card belongs to a user the cache does not know yet.
+  function rebuildIfMissing(key) {
+    if (paymentsByEmail[key]) return false;
+    if (cacheBuilding || Date.now() - cacheTime < 5000) return false;
+    cacheBuilt = false;
+    buildUserIdCache(function() { injectWalletQr(); injectRevertButtons(); });
+    return true;
+  }
+
+  function findApprovedSection() {
+    var h2s = document.querySelectorAll('h2');
+    for (var i = 0; i < h2s.length; i++) {
+      if (h2s[i].textContent.includes('Approved Payments')) {
+        return h2s[i].closest('.space-y-6') || h2s[i].parentElement;
+      }
+    }
+    return null;
   }
 
   // === Build a public URL for an uploaded wallet QR photo ===
@@ -556,18 +582,23 @@
 
     var userCards = approvedSection.querySelectorAll('.border.border-gray-700.rounded-lg');
     userCards.forEach(function(card) {
-      if (card.querySelector('.wallet-qr-view')) return;
-
       // Only inject when the card is expanded (details panel present)
       var panel = card.querySelector('.border-t.border-gray-700');
       if (!panel) return;
 
       var email = getCardEmail(card);
       if (!email) return;
+      if (rebuildIfMissing(email.toLowerCase())) return;
 
       var qr = walletQrByEmail[email.toLowerCase()];
+      var existing = card.querySelector('.wallet-qr-view');
+      if (existing) {
+        if (existing.getAttribute('data-qr') === (qr || '')) return;
+        existing.parentNode.removeChild(existing);
+      }
       var box = document.createElement('div');
       box.className = 'wallet-qr-view';
+      box.setAttribute('data-qr', qr || '');
       box.style.cssText = 'margin:0 16px 14px; padding:12px 0; border-bottom:1px solid #374151;';
       if (qr) {
         var full = buildWalletQrUrl(qr);
@@ -634,10 +665,14 @@
     var key = email.toLowerCase();
     var box = btn.closest ? btn.closest('.claim-revert-box') : null;
     var paymentIds = [];
+    var labels = [];
     if (box) {
       var cbs = box.querySelectorAll('.trust-claim-cb');
       for (var i = 0; i < cbs.length; i++) {
-        if (cbs[i].checked) paymentIds.push(parseInt(cbs[i].getAttribute('data-pid'), 10));
+        if (cbs[i].checked) {
+          paymentIds.push(parseInt(cbs[i].getAttribute('data-pid'), 10));
+          labels.push(cbs[i].getAttribute('data-label'));
+        }
       }
     }
     if (!paymentIds.length) { alert('Tick at least one claim to mark paid.'); return; }
@@ -651,7 +686,7 @@
       return !l.payout_group_id;
     }).map(function(l) { return l.id; });
 
-    var msg = 'Mark ' + paymentIds.length + ' TICKED approved claim(s) as PAID (manual, description "TRUST") for ' + email + '?';
+    var msg = 'Mark ' + paymentIds.length + ' TICKED approved claim(s) as PAID (manual, description "TRUST") for ' + email + '?\n\n' + labels.join('\n');
     if (dedIds.length) msg += '\n\nThis will also clear ' + dedIds.length + ' prior payout record(s) so no negative balance remains.';
     msg += '\n\nThese claims will be considered paid and will no longer appear in Approved & Pay.';
     if (!confirm(msg)) return;
@@ -709,15 +744,22 @@
     userCards.forEach(function(card) {
       var panel = card.querySelector('.border-t.border-gray-700');
       if (!panel) return;
-      if (panel.querySelector('.claim-revert-box')) return;
 
       var email = getCardEmail(card);
       if (!email) return;
+      if (rebuildIfMissing(email.toLowerCase())) return;
       var pays = paymentsByEmail[email.toLowerCase()];
+      var sig = (pays || []).map(function(p) { return p.id; }).join(',');
+      var existing = panel.querySelector('.claim-revert-box');
+      if (existing) {
+        if (existing.getAttribute('data-sig') === sig) return;
+        existing.parentNode.removeChild(existing);
+      }
       if (!pays || !pays.length) return;
 
       var box = document.createElement('div');
       box.className = 'claim-revert-box';
+      box.setAttribute('data-sig', sig);
       box.style.cssText = 'margin:0 16px 14px; padding:12px 0; border-bottom:1px solid #374151;';
 
       var header = document.createElement('div');
@@ -752,8 +794,12 @@
         var cb = document.createElement('input');
         cb.type = 'checkbox';
         cb.className = 'trust-claim-cb';
-        cb.checked = true;
+        cb.checked = tickState[p.id] !== false;
         cb.setAttribute('data-pid', p.id);
+        cb.setAttribute('data-label', '#' + p.id + ' ' + Number(amt).toFixed(2) + ' ' + cur);
+        cb.onchange = (function(pid) {
+          return function() { tickState[pid] = this.checked; };
+        })(p.id);
         cb.style.cssText = 'width:15px; height:15px; flex-shrink:0; cursor:pointer;';
         var info = document.createElement('div');
         info.style.cssText = 'font-size:12px; color:#d1d5db; min-width:0;';
@@ -786,6 +832,11 @@
   var observer = new MutationObserver(function() {
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(function() {
+      var approvedVisible = !!findApprovedSection();
+      if (approvedVisible && !approvedWasVisible && !cacheBuilding && Date.now() - cacheTime > 10000) {
+        cacheBuilt = false;
+      }
+      approvedWasVisible = approvedVisible;
       injectBalanceBadge();
       injectLoginButtons();
       injectWalletEdit();
