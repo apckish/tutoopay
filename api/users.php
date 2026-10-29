@@ -7,6 +7,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'PUT' && isset($_GET['user_id'])) {
     $body = get_json_body();
     $user_id = intval($_GET['user_id']);
     
+    // Enable/disable teacher login
+    if (isset($body['status'])) {
+        $status = $body['status'];
+        if (!in_array($status, ['active', 'inactive'], true)) json_error('Status must be active or inactive');
+        $stmt = $db->prepare("UPDATE users SET status = ? WHERE id = ? AND role = 'user'");
+        $stmt->bind_param("si", $status, $user_id);
+        $stmt->execute();
+        $affected = $stmt->affected_rows;
+        $stmt->close();
+        $db->close();
+        if ($affected < 0) json_error('Failed to update status');
+        json_response(['message' => 'Status updated', 'status' => $status]);
+    }
+
     // Update commission if provided
     if (isset($body['commission_pct'])) {
         $commission = floatval($body['commission_pct']);

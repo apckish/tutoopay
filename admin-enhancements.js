@@ -864,6 +864,58 @@
     });
   }
 
+  // === Users tab: enable/disable teacher login ===
+  var statusOverride = {};
+  function injectStatusToggle() {
+    var h2 = Array.prototype.find.call(document.querySelectorAll('h2'), function(h) { return /^Users \(\d+\)$/.test(h.textContent.trim()); });
+    if (!h2) return;
+    var table = h2.closest('div').parentElement.querySelector('table');
+    if (!table) return;
+    table.querySelectorAll('tbody > tr').forEach(function(tr) {
+      var tds = tr.children;
+      if (tds.length < 10) return;
+      var id = parseInt(tds[0].textContent.trim(), 10);
+      if (!id) return;
+      var badge = tds[8].querySelector('span');
+      if (!badge) return;
+      var status = statusOverride[id] || badge.textContent.trim();
+      if (badge.textContent.trim() !== status) badge.textContent = status;
+      var badgeCls = 'px-2 py-0.5 rounded text-xs font-medium ' + (status === 'active' ? 'bg-emerald-900/50 text-emerald-300' : 'bg-red-900/50 text-red-300');
+      if (badge.className !== badgeCls) badge.className = badgeCls;
+      var btn = tds[9].querySelector('.status-toggle-btn');
+      if (!btn) {
+        var holder = tds[9].querySelector('.flex') || tds[9];
+        btn = document.createElement('button');
+        btn.className = 'status-toggle-btn px-2 py-0.5 rounded text-xs font-medium transition';
+        holder.appendChild(btn);
+        btn.onclick = function(e) {
+          e.stopPropagation();
+          var cur = statusOverride[id] || tds[8].querySelector('span').textContent.trim();
+          var next = cur === 'active' ? 'inactive' : 'active';
+          var name = tds[1].textContent.trim();
+          if (!confirm((next === 'inactive' ? 'Disable login for ' : 'Re-enable login for ') + name + ' (ID ' + id + ')?')) return;
+          btn.disabled = true;
+          fetch('/api/users.php?user_id=' + id, {
+            method: 'PUT', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status: next })
+          }).then(function(r) { return r.json().then(function(d) { if (!r.ok) throw new Error(d.detail || d.error || 'Failed'); return d; }); })
+            .then(function() { statusOverride[id] = next; injectStatusToggle(); })
+            .catch(function(err) { alert('Error: ' + err.message); })
+            .finally(function() { btn.disabled = false; });
+        };
+      }
+      var label = status === 'active' ? 'Disable' : 'Enable';
+      if (btn.textContent !== label) {
+        btn.textContent = label;
+        btn.title = status === 'active' ? 'Block this teacher from logging in' : 'Allow this teacher to log in again';
+        btn.style.cssText = status === 'active'
+          ? 'background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.3);'
+          : 'background: rgba(16,185,129,0.15); color: #34d399; border: 1px solid rgba(16,185,129,0.3);';
+      }
+    });
+  }
+
   // === MutationObserver ===
   var debounceTimer = null;
   var observer = new MutationObserver(function() {
@@ -879,6 +931,7 @@
       injectWalletEdit();
       injectWalletQr();
       injectRevertButtons();
+      injectStatusToggle();
     }, 300);
   });
 
@@ -890,6 +943,7 @@
     injectWalletEdit();
     injectWalletQr();
     injectRevertButtons();
+    injectStatusToggle();
   }
 
   if (document.readyState === 'loading') {
