@@ -7,6 +7,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'PUT' && isset($_GET['user_id'])) {
     $body = get_json_body();
     $user_id = intval($_GET['user_id']);
     
+    // Enable/disable teacher login
+    if (isset($body['status'])) {
+        $status = $body['status'];
+        if (!in_array($status, ['active', 'inactive'], true)) json_error('Status must be active or inactive');
+        $stmt = $db->prepare("UPDATE users SET status = ? WHERE id = ? AND role = 'user'");
+        $stmt->bind_param("si", $status, $user_id);
+        $stmt->execute();
+        $affected = $stmt->affected_rows;
+        $stmt->close();
+        $db->close();
+        if ($affected < 0) json_error('Failed to update status');
+        json_response(['message' => 'Status updated', 'status' => $status]);
+    }
+
     // Update commission if provided
     if (isset($body['commission_pct'])) {
         $commission = floatval($body['commission_pct']);
@@ -106,13 +120,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['user_id'])) {
         
         // Calculate commission and payout
         $commission_amount = round($row['amount_usd'] * $commission_pct / 100, 2);
-        $exchange_fee = 2.0; // $2 exchange fee
+        $row['effective_wallet'] = ($row['wallet_address'] ?? '') ?: ($row['user_wallet_address'] ?? '');
+        // Network transfer cost: BEP20 (0x...) $1, TRC20 (T...) $5
+        $exchange_fee = strpos($row['effective_wallet'], '0x') === 0 ? 1.0 : 5.0;
         $payout = round($row['amount_usd'] - $commission_amount - $exchange_fee, 2);
         $row['commission_amount'] = $commission_amount;
         $row['exchange_fee'] = $exchange_fee;
         $row['calculated_payout'] = max(0, $payout);
-        
-        $row['effective_wallet'] = ($row['wallet_address'] ?? '') ?: ($row['user_wallet_address'] ?? '');
         $payments[] = $row;
     }
     $stmt->close();
@@ -154,7 +168,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['user_id'])) {
     ]);
 }
 
-$result = $db->query("SELECT id, full_name, email, wallet_address, wallet_name, whitelisted, whatsapp_number, telegram_id, status, commission_pct FROM users ORDER BY id DESC");
+$result = $db->query("SELECT id, full_name, email, wallet_address, wallet_name, wallet_qr_url, bep20_address, bep20_qr_url, bep20_updated_at, trc20_address, trc20_qr_url, trc20_updated_at, whitelisted, whatsapp_number, telegram_id, status, commission_pct FROM users ORDER BY id DESC");
 $users = [];
 while ($row = $result->fetch_assoc()) {
     $users[] = $row;

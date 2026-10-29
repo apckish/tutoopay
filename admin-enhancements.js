@@ -3,7 +3,9 @@
 
   // === CSS Fix: Allow dropdowns in tables to overflow visibly ===
   var style = document.createElement('style');
-  style.textContent = '.overflow-x-auto { overflow: visible !important; }';
+  style.textContent = '.max-w-7xl { max-width: 1920px !important; }' +
+    ' .overflow-x-auto { overflow-x: auto !important; max-width: 100%; }' +
+    ' .overflow-x-auto:has(.absolute) { overflow: visible !important; }';
   document.head.appendChild(style);
 
   // === Intercept fetch to refresh balance after payments ===
@@ -84,6 +86,7 @@
   // === User ID Cache ===
   var userIdCache = {};
   var walletQrByEmail = {};
+  var walletsByEmail = {};
   var netByEmail = {};
   var paymentsByEmail = {};
   var adminPaidByEmail = {};
@@ -93,6 +96,22 @@
   var cacheTime = 0;
   var tickState = {};
   var approvedWasVisible = false;
+
+  function pickWallets(o) {
+    return {
+      bep20: { addr: o.bep20_address || '', qr: o.bep20_qr_url || '', at: o.bep20_updated_at || '' },
+      trc20: { addr: o.trc20_address || '', qr: o.trc20_qr_url || '', at: o.trc20_updated_at || '' }
+    };
+  }
+
+  function walletAgeText(at) {
+    if (!at) return 'upload time unknown';
+    var d = new Date(String(at).replace(' ', 'T'));
+    if (isNaN(d.getTime())) return 'uploaded ' + at;
+    var days = Math.floor((Date.now() - d.getTime()) / 86400000);
+    var rel = days <= 0 ? 'today' : (days === 1 ? '1 day ago' : days + ' days ago');
+    return 'uploaded ' + String(at).slice(0, 16) + ' (' + rel + ')';
+  }
 
   function buildUserIdCache(callback) {
     if (cacheBuilt) { if (callback) callback(); return; }
@@ -115,12 +134,13 @@
         var groups = (data && data.users) ? data.users : data;
         if (Array.isArray(groups)) {
           loadedOk = true;
-          walletQrByEmail = {}; netByEmail = {}; paymentsByEmail = {}; adminPaidByEmail = {};
+          walletQrByEmail = {}; walletsByEmail = {}; netByEmail = {}; paymentsByEmail = {}; adminPaidByEmail = {};
           groups.forEach(function(group) {
             if (group.user_email) {
               var key = group.user_email.toLowerCase();
               if (group.user_id) userIdCache[key] = group.user_id;
               if (group.wallet_qr_url) walletQrByEmail[key] = group.wallet_qr_url;
+              walletsByEmail[key] = pickWallets(group);
               if (group.net_usd !== undefined && group.net_usd !== null) netByEmail[key] = group.net_usd;
               paymentsByEmail[key] = Array.isArray(group.payments) ? group.payments : [];
               adminPaidByEmail[key] = Array.isArray(group.admin_paid) ? group.admin_paid : [];
@@ -138,6 +158,7 @@
               var key = u.email.toLowerCase();
               userIdCache[key] = u.id;
               if (u.wallet_qr_url && !walletQrByEmail[key]) walletQrByEmail[key] = u.wallet_qr_url;
+              if (!walletsByEmail[key]) walletsByEmail[key] = pickWallets(u);
             }
           });
         }
@@ -154,6 +175,7 @@
                   var key = u.email.toLowerCase();
                   userIdCache[key] = u.id;
                   if (u.wallet_qr_url && !walletQrByEmail[key]) walletQrByEmail[key] = u.wallet_qr_url;
+              if (!walletsByEmail[key]) walletsByEmail[key] = pickWallets(u);
                 }
               });
             }
@@ -591,36 +613,53 @@
       if (rebuildIfMissing(email.toLowerCase())) return;
 
       var qr = walletQrByEmail[email.toLowerCase()];
+      var wl = walletsByEmail[email.toLowerCase()] || pickWallets({});
+      var sig = JSON.stringify(wl) + '|' + (qr || '');
       var existing = card.querySelector('.wallet-qr-view');
       if (existing) {
-        if (existing.getAttribute('data-qr') === (qr || '')) return;
+        if (existing.getAttribute('data-qr') === sig) return;
         existing.parentNode.removeChild(existing);
       }
       var box = document.createElement('div');
       box.className = 'wallet-qr-view';
-      box.setAttribute('data-qr', qr || '');
-      box.style.cssText = 'margin:0 16px 14px; padding:12px 0; border-bottom:1px solid #374151;';
-      if (qr) {
-        var full = buildWalletQrUrl(qr);
+      box.setAttribute('data-qr', sig);
+      box.style.cssText = 'margin:0 16px 14px; padding:12px 0; border-bottom:1px solid #374151; display:flex; flex-wrap:wrap; gap:18px;';
+      var nets = [['bep20', 'BEP20 ($1)'], ['trc20', 'TRC20 ($5)']];
+      if (!wl.bep20.qr && !wl.trc20.qr && qr) wl.bep20 = { addr: '', qr: qr, at: '' };
+      nets.forEach(function(n) {
+        var w = wl[n[0]];
+        var col = document.createElement('div');
+        col.style.cssText = 'min-width:170px; max-width:260px;';
         var label = document.createElement('div');
-        label.style.cssText = 'font-size:12px; color:#9ca3af; margin-bottom:6px; font-weight:600;';
-        label.textContent = 'Wallet QR (uploaded by user)';
-        var img = document.createElement('img');
-        img.src = full;
-        img.alt = 'Wallet QR';
-        img.style.cssText = 'max-width:160px; max-height:160px; border-radius:8px; border:1px solid #374151; background:#fff; padding:4px; display:block; cursor:zoom-in;';
-        img.onclick = (function(cardEl, emailKey) {
-          return function(e) {
-            e.stopPropagation();
-            e.preventDefault();
-            showQrModal(full, extractNetPayout(cardEl), emailKey);
-          };
-        })(card, email.toLowerCase());
-        box.appendChild(label);
-        box.appendChild(img);
-      } else {
-        box.innerHTML = '<div style="font-size:12px; color:#6b7280;">No wallet QR photo uploaded by this user.</div>';
-      }
+        label.style.cssText = 'font-size:12px; color:#9ca3af; margin-bottom:4px; font-weight:600;';
+        label.textContent = 'Wallet QR ' + n[1];
+        col.appendChild(label);
+        if (w.qr) {
+          var full = buildWalletQrUrl(w.qr);
+          var meta = document.createElement('div');
+          meta.style.cssText = 'font-size:11px; color:#d1d5db; margin-bottom:6px; word-break:break-all;';
+          meta.textContent = (w.addr ? w.addr + ' \u00b7 ' : '') + walletAgeText(w.at);
+          var img = document.createElement('img');
+          img.src = full;
+          img.alt = 'Wallet QR ' + n[0].toUpperCase();
+          img.style.cssText = 'max-width:160px; max-height:160px; border-radius:8px; border:1px solid #374151; background:#fff; padding:4px; display:block; cursor:zoom-in;';
+          img.onclick = (function(cardEl, emailKey, url) {
+            return function(e) {
+              e.stopPropagation();
+              e.preventDefault();
+              showQrModal(url, extractNetPayout(cardEl), emailKey);
+            };
+          })(card, email.toLowerCase(), full);
+          col.appendChild(meta);
+          col.appendChild(img);
+        } else {
+          var none = document.createElement('div');
+          none.style.cssText = 'font-size:12px; color:#f87171;';
+          none.textContent = 'Not uploaded yet';
+          col.appendChild(none);
+        }
+        box.appendChild(col);
+      });
       panel.insertBefore(box, panel.firstChild);
     });
   }
@@ -827,6 +866,395 @@
     });
   }
 
+  // === Users tab: enable/disable teacher login ===
+  var statusOverride = {};
+  function injectStatusToggle() {
+    var h2 = Array.prototype.find.call(document.querySelectorAll('h2'), function(h) { return /^Users \(\d+\)$/.test(h.textContent.trim()); });
+    if (!h2) return;
+    var table = h2.closest('div').parentElement.querySelector('table');
+    if (!table) return;
+    table.querySelectorAll('thead th').forEach(function(th) { if (th.style.padding !== '8px 6px') th.style.padding = '8px 6px'; });
+    table.querySelectorAll('tbody > tr').forEach(function(tr) {
+      var tds = tr.children;
+      if (tds.length < 10) return;
+      if (!tr.dataset.compact) {
+        tr.dataset.compact = '1';
+        Array.prototype.forEach.call(tds, function(td) { td.style.padding = '8px 6px'; });
+        tds[2].style.cssText += 'max-width:190px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;';
+      }
+      if (tds[2].title !== tds[2].textContent) tds[2].title = tds[2].textContent;
+      var wspan = tds[5].querySelector('span');
+      if (wspan && !wspan.dataset.compact) {
+        wspan.dataset.compact = '1';
+        wspan.style.cssText += 'display:inline-block; max-width:130px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; vertical-align:middle;';
+        wspan.title = wspan.textContent + ' (click to edit)';
+      }
+      var id = parseInt(tds[0].textContent.trim(), 10);
+      if (!id) return;
+      var badge = tds[8].querySelector('span');
+      if (!badge) return;
+      var status = statusOverride[id] || badge.textContent.trim();
+      if (badge.textContent.trim() !== status) badge.textContent = status;
+      var badgeCls = 'px-2 py-0.5 rounded text-xs font-medium ' + (status === 'active' ? 'bg-emerald-900/50 text-emerald-300' : 'bg-red-900/50 text-red-300');
+      if (badge.className !== badgeCls) badge.className = badgeCls;
+      var btn = tds[9].querySelector('.status-toggle-btn');
+      if (!btn) {
+        var holder = tds[9].querySelector('.flex') || tds[9];
+        btn = document.createElement('button');
+        btn.className = 'status-toggle-btn px-2 py-0.5 rounded text-xs font-medium transition';
+        holder.appendChild(btn);
+        btn.onclick = function(e) {
+          e.stopPropagation();
+          var cur = statusOverride[id] || tds[8].querySelector('span').textContent.trim();
+          var next = cur === 'active' ? 'inactive' : 'active';
+          var name = tds[1].textContent.trim();
+          if (!confirm((next === 'inactive' ? 'Disable login for ' : 'Re-enable login for ') + name + ' (ID ' + id + ')?')) return;
+          btn.disabled = true;
+          fetch('/api/users.php?user_id=' + id, {
+            method: 'PUT', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status: next })
+          }).then(function(r) { return r.json().then(function(d) { if (!r.ok) throw new Error(d.detail || d.error || 'Failed'); return d; }); })
+            .then(function() { statusOverride[id] = next; injectStatusToggle(); injectUsersTools(); })
+            .catch(function(err) { alert('Error: ' + err.message); })
+            .finally(function() { btn.disabled = false; });
+        };
+      }
+      var label = status === 'active' ? 'Disable' : 'Enable';
+      if (btn.textContent !== label) {
+        btn.textContent = label;
+        btn.title = status === 'active' ? 'Block this teacher from logging in' : 'Allow this teacher to log in again';
+        btn.style.cssText = status === 'active'
+          ? 'background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.3);'
+          : 'background: rgba(16,185,129,0.15); color: #34d399; border: 1px solid rgba(16,185,129,0.3);';
+      }
+    });
+  }
+
+  // === Users tab: status counts, status filter, column sort ===
+  var usersFilter = 'all';
+  var usersSort = { col: -1, dir: 1 };
+  function usersRowStatus(tds) {
+    var id = parseInt(tds[0].textContent.trim(), 10);
+    var b = tds[8].querySelector('span');
+    return statusOverride[id] || (b ? b.textContent.trim() : '');
+  }
+  function usersSortKey(tds, col) {
+    var t = (tds[col].querySelector('input') ? tds[col].querySelector('input').value : tds[col].textContent).trim();
+    if (col === 0 || col === 7) return parseFloat(t) || 0;
+    if (col === 8) return usersRowStatus(tds);
+    return t.toLowerCase();
+  }
+  function injectUsersTools() {
+    var h2 = Array.prototype.find.call(document.querySelectorAll('h2'), function(h) { return /^Users \(\d+\)$/.test(h.textContent.trim()); });
+    if (!h2) return;
+    var root = h2.closest('div').parentElement;
+    var frame = root.querySelector('.overflow-x-auto');
+    var table = frame && frame.querySelector('table');
+    var tbody = table && table.querySelector('tbody');
+    if (!tbody) return;
+
+    var groups = [];
+    Array.prototype.forEach.call(tbody.children, function(tr) {
+      if (tr.children.length >= 10) groups.push({ main: tr, rows: [tr] });
+      else if (groups.length) groups[groups.length - 1].rows.push(tr);
+    });
+
+    var nActive = 0, nInactive = 0;
+    groups.forEach(function(g) {
+      var st = usersRowStatus(g.main.children);
+      if (st === 'active') nActive++; else nInactive++;
+      var show = usersFilter === 'all' || (usersFilter === 'active' ? st === 'active' : st !== 'active');
+      g.rows.forEach(function(r) { var d = show ? '' : 'none'; if (r.style.display !== d) r.style.display = d; });
+    });
+
+    if (usersSort.col >= 0) {
+      var sorted = groups.slice().sort(function(a, b) {
+        var ka = usersSortKey(a.main.children, usersSort.col), kb = usersSortKey(b.main.children, usersSort.col);
+        return (ka < kb ? -1 : ka > kb ? 1 : 0) * usersSort.dir;
+      });
+      var flat = [];
+      sorted.forEach(function(g) { flat = flat.concat(g.rows); });
+      var inOrder = flat.every(function(r, i) { return tbody.children[i] === r; });
+      if (!inOrder) flat.forEach(function(r) { tbody.appendChild(r); });
+    }
+
+    var bar = root.querySelector('.users-status-bar');
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.className = 'users-status-bar';
+      bar.style.cssText = 'display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:0 0 12px 0; font-size:13px;';
+      frame.parentElement.insertBefore(bar, frame);
+      bar.onclick = function(e) {
+        var b = e.target.closest('button[data-f]');
+        if (!b) return;
+        usersFilter = b.getAttribute('data-f');
+        bar.dataset.sig = '';
+        injectUsersTools();
+      };
+    }
+    var shown = usersFilter === 'all' ? groups.length : (usersFilter === 'active' ? nActive : nInactive);
+    var sig = [usersFilter, groups.length, nActive, nInactive].join('|');
+    if (bar.dataset.sig !== sig) {
+      bar.dataset.sig = sig;
+      var pill = function(f, label, n, color) {
+        var on = usersFilter === f;
+        return '<button data-f="' + f + '" style="padding:4px 12px; border-radius:999px; cursor:pointer; font-weight:600; border:1px solid ' + color + '; ' +
+          (on ? 'background:' + color + '; color:#0b0f19;' : 'background:transparent; color:' + color + ';') + '">' + label + ' <b>' + n + '</b></button>';
+      };
+      bar.innerHTML = pill('all', 'All', groups.length, '#9ca3af') + pill('active', 'Active', nActive, '#34d399') + pill('inactive', 'Disabled', nInactive, '#f87171') +
+        '<span style="color:#6b7280; margin-left:6px;">Showing ' + shown + ' · click a column header to sort</span>';
+    }
+
+    var sortable = { 0: 1, 1: 1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1, 7: 1, 8: 1 };
+    table.querySelectorAll('thead th').forEach(function(th, i) {
+      if (!sortable[i]) return;
+      if (!th.dataset.sortable) {
+        th.dataset.sortable = '1';
+        th.style.cursor = 'pointer';
+        th.style.userSelect = 'none';
+        th.title = 'Click to sort';
+        th.addEventListener('click', function() {
+          if (usersSort.col === i) usersSort.dir = -usersSort.dir; else { usersSort.col = i; usersSort.dir = 1; }
+          injectUsersTools();
+        });
+        var ind = document.createElement('span');
+        ind.className = 'sort-ind';
+        ind.style.cssText = 'margin-left:4px; color:#34d399;';
+        th.appendChild(ind);
+      }
+      var ind2 = th.querySelector('.sort-ind');
+      var txt = usersSort.col === i ? (usersSort.dir === 1 ? '▲' : '▼') : '';
+      if (ind2 && ind2.textContent !== txt) ind2.textContent = txt;
+    });
+  }
+
+  // === Calculations tab: approved+unpaid grouped by teacher, multi-select gross/net ===
+  var calc = { on: false, data: null, sel: {}, ded: {}, net: {}, q: '', loading: false, err: '', timer: null };
+  var CALC_KEY = 'tp_calc_state_v1';
+  try { var cs = JSON.parse(localStorage.getItem(CALC_KEY) || '{}'); ['sel', 'ded', 'net'].forEach(function(k) { if (cs[k] && typeof cs[k] === 'object') calc[k] = cs[k]; }); calc.q = cs.q || ''; calc.wasOn = !!cs.on; } catch (e) {}
+  function calcSave() {
+    try { localStorage.setItem(CALC_KEY, JSON.stringify({ sel: calc.sel, ded: calc.ded, net: calc.net, q: calc.q, on: calc.on })); } catch (e) {}
+  }
+  function calcPrune() {
+    var ids = {}, dids = {};
+    (calc.data || []).forEach(function(u) {
+      u.payments.forEach(function(p) { ids[p.id] = 1; });
+      (u.admin_paid || []).forEach(function(d) { dids[d.id] = 1; });
+    });
+    Object.keys(calc.sel).forEach(function(k) { if (!ids[k]) delete calc.sel[k]; });
+    Object.keys(calc.ded).forEach(function(k) { if (!dids[k]) delete calc.ded[k]; });
+    calcSave();
+  }
+  function calcEsc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function(c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+  function r2(n) { return Math.round(n * 100) / 100; }
+  function usd(n) { return '$' + r2(n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
+  function calcDefaultNet() { return 'TRC20'; }
+  function calcUserTotals(u) {
+    var gross = 0, n = 0, ded = 0;
+    u.payments.forEach(function(p) { if (calc.sel[p.id]) { gross += Number(p.amount_usd) || 0; n++; } });
+    (u.admin_paid || []).forEach(function(d) { if (calc.ded[d.id]) ded += Number(d.usdt_amount) || 0; });
+    var comm = r2(gross * (Number(u.commission_pct) / 100));
+    var fee = n ? ((calc.net[u.user_id] || calcDefaultNet(u)) === 'TRC20' ? 5 : 1) : 0;
+    return { n: n, gross: r2(gross), comm: comm, fee: fee, ded: r2(ded), net: n ? Math.max(0, r2(gross - comm - fee - ded)) : 0 };
+  }
+  function calcLoad(silent) {
+    if (calc.loading) return;
+    calc.loading = true;
+    if (!silent) { calc.err = ''; calcRender(); }
+    fetch('/api/approved_grouped.php', { credentials: 'same-origin' })
+      .then(function(r) { return r.json().then(function(d) { if (!r.ok) throw new Error(d.detail || d.error || 'Failed to load'); return d; }); })
+      .then(function(d) { calc.data = (d.users || []).filter(function(u) { return u.payments && u.payments.length; }); calc.err = ''; calcPrune(); })
+      .catch(function(e) { if (!silent || !calc.data) calc.err = e.message; })
+      .finally(function() {
+        calc.loading = false;
+        if (!calc.on) return;
+        var ae = document.activeElement, panel = document.getElementById('calc-panel');
+        var typing = ae && ae.classList && ae.classList.contains('calc-q') ? ae.selectionStart : -1;
+        if (silent && ae && ae.tagName === 'SELECT' && panel && panel.contains(ae)) return;
+        calcRender();
+        if (typing >= 0) { var qi = document.querySelector('#calc-panel .calc-q'); if (qi) { qi.focus(); qi.setSelectionRange(typing, typing); } }
+      });
+  }
+  function calcSummary() {
+    var t = { people: 0, n: 0, gross: 0, comm: 0, fee: 0, ded: 0, net: 0 };
+    (calc.data || []).forEach(function(u) {
+      var x = calcUserTotals(u);
+      if (!x.n) return;
+      t.people++; t.n += x.n; t.gross += x.gross; t.comm += x.comm; t.fee += x.fee; t.ded += x.ded; t.net += x.net;
+    });
+    return t;
+  }
+  function calcSummaryHtml() {
+    var t = calcSummary();
+    var cell = function(label, val, color, big) {
+      return '<div style="min-width:120px"><div style="font-size:11px; color:#9ca3af; text-transform:uppercase; letter-spacing:.04em">' + label + '</div>' +
+        '<div style="font-size:' + (big ? 26 : 20) + 'px; font-weight:700; color:' + color + '">' + val + '</div></div>';
+    };
+    return cell('Selected', t.n + ' payment' + (t.n === 1 ? '' : 's') + ' · ' + t.people + ' ' + (t.people === 1 ? 'person' : 'people'), '#e5e7eb') +
+      cell('Gross', usd(t.gross), '#60a5fa', true) +
+      cell('Commission', '−' + usd(t.comm), '#fbbf24') +
+      cell('Transfer fees', '−' + usd(t.fee), '#fbbf24') +
+      (t.ded ? cell('Already paid (deducted)', '−' + usd(t.ded), '#f87171') : '') +
+      cell('Net payout', usd(t.net), '#34d399', true);
+  }
+  function calcRefreshNumbers(panel) {
+    var s = panel.querySelector('.calc-summary');
+    if (s) s.innerHTML = calcSummaryHtml();
+    (calc.data || []).forEach(function(u) {
+      var x = calcUserTotals(u);
+      var el = panel.querySelector('.calc-sub[data-u="' + u.user_id + '"]');
+      if (el) el.innerHTML = x.n ? (x.n + ' selected · gross <b style="color:#60a5fa">' + usd(x.gross) + '</b> · comm ' + Number(u.commission_pct) + '% −' + usd(x.comm) +
+        ' · fee −' + usd(x.fee) + (x.ded ? ' · paid −' + usd(x.ded) : '') + ' · net <b style="color:#34d399">' + usd(x.net) + '</b>') : '<span style="color:#6b7280">nothing selected</span>';
+      var all = panel.querySelector('input.calc-user[data-u="' + u.user_id + '"]');
+      if (all) { all.checked = x.n === u.payments.length; all.indeterminate = x.n > 0 && x.n < u.payments.length; }
+    });
+  }
+  function calcRender() {
+    var panel = document.getElementById('calc-panel');
+    if (!panel) return;
+    var head = '<div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; margin-bottom:12px">' +
+      '<h2 class="text-lg font-semibold">Calculations — approved, not paid' + (calc.data ? ' (' + calc.data.length + ' people)' : '') + '</h2>' +
+      '<div style="display:flex; gap:8px; align-items:center">' +
+      '<input class="calc-q" placeholder="Search name or email..." value="' + calcEsc(calc.q) + '" style="background:#1f2937; border:1px solid #374151; border-radius:8px; padding:6px 10px; color:#fff; font-size:13px; width:220px">' +
+      '<button data-act="all" style="background:#065f46; color:#d1fae5; border-radius:8px; padding:6px 12px; font-size:13px">Select all</button>' +
+      '<button data-act="none" style="background:#374151; color:#e5e7eb; border-radius:8px; padding:6px 12px; font-size:13px">Clear</button>' +
+      '<button data-act="reload" style="background:#1d4ed8; color:#fff; border-radius:8px; padding:6px 12px; font-size:13px">Refresh</button></div></div>' +
+      '<div class="calc-summary" style="position:sticky; top:0; z-index:5; display:flex; gap:24px; flex-wrap:wrap; background:#111827; border:1px solid #065f46; border-radius:12px; padding:14px 18px; margin-bottom:14px"></div>';
+    if (calc.loading) { panel.innerHTML = head + '<p style="color:#9ca3af">Loading...</p>'; return; }
+    if (calc.err) { panel.innerHTML = head + '<p style="color:#f87171">' + calcEsc(calc.err) + '</p>'; return; }
+    var q = calc.q.trim().toLowerCase();
+    var list = (calc.data || []).filter(function(u) { return !q || (u.user_name || '').toLowerCase().indexOf(q) >= 0 || (u.user_email || '').toLowerCase().indexOf(q) >= 0; });
+    var body = list.map(function(u) {
+      var netw = calc.net[u.user_id] || calcDefaultNet(u);
+      var rows = u.payments.map(function(p) {
+        return '<tr style="border-top:1px solid #1f2937">' +
+          '<td style="padding:6px"><input type="checkbox" class="calc-p" data-u="' + u.user_id + '" data-id="' + p.id + '"' + (calc.sel[p.id] ? ' checked' : '') + '></td>' +
+          '<td style="padding:6px; color:#9ca3af">#' + p.id + '</td>' +
+          '<td style="padding:6px">' + calcEsc((p.date || '').slice(0, 10)) + '</td>' +
+          '<td style="padding:6px">' + calcEsc(p.payment_method) + '</td>' +
+          '<td style="padding:6px; color:#9ca3af">' + calcEsc(p.sender_name) + '</td>' +
+          '<td style="padding:6px; text-align:right">' + calcEsc(Number(p.approved_amount).toFixed(2) + ' ' + (p.approved_currency || '')) + '</td>' +
+          '<td style="padding:6px; text-align:right; color:#60a5fa; font-weight:600">' + usd(Number(p.amount_usd) || 0) + '</td></tr>';
+      }).join('');
+      var deds = (u.admin_paid || []).map(function(d) {
+        return '<tr style="border-top:1px solid #1f2937; color:#fca5a5">' +
+          '<td style="padding:6px"><input type="checkbox" class="calc-d" data-id="' + d.id + '"' + (calc.ded[d.id] ? ' checked' : '') + '></td>' +
+          '<td style="padding:6px" colspan="5">Already paid (' + calcEsc(d.action) + ', ' + calcEsc((d.created_at || '').slice(0, 10)) + ') — tick to deduct</td>' +
+          '<td style="padding:6px; text-align:right">−' + usd(Number(d.usdt_amount) || 0) + '</td></tr>';
+      }).join('');
+      return '<div style="background:#111827; border:1px solid #1f2937; border-radius:12px; padding:12px 14px; margin-bottom:10px">' +
+        '<div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap">' +
+        '<input type="checkbox" class="calc-user" data-u="' + u.user_id + '" title="Select all payments of this person">' +
+        '<b style="color:#fff">' + calcEsc(u.user_name) + '</b><span style="color:#6b7280; font-size:12px">' + calcEsc(u.user_email) + ' · ' + u.payments.length + ' payment' + (u.payments.length === 1 ? '' : 's') + ' · total ' + usd(Number(u.total_approved_usd) || 0) + '</span>' +
+        '<select class="calc-net" data-u="' + u.user_id + '" style="margin-left:auto; background:#1f2937; color:#e5e7eb; border:1px solid #374151; border-radius:6px; font-size:12px; padding:2px 6px">' +
+        '<option value="BEP20"' + (netw === 'BEP20' ? ' selected' : '') + '>BEP20 fee $1' + (u.bep20_address ? '' : ' (no wallet)') + '</option>' +
+        '<option value="TRC20"' + (netw === 'TRC20' ? ' selected' : '') + '>TRC20 fee $5' + (u.trc20_address ? '' : ' (no wallet)') + '</option></select></div>' +
+        '<table style="width:100%; font-size:12px; margin-top:8px"><tbody>' + rows + deds + '</tbody></table>' +
+        '<div class="calc-sub" data-u="' + u.user_id + '" style="font-size:12px; color:#d1d5db; margin-top:6px; text-align:right"></div></div>';
+    }).join('');
+    panel.innerHTML = head + (list.length ? body : '<p style="color:#9ca3af">No approved unpaid payments.</p>');
+    calcRefreshNumbers(panel);
+  }
+  function calcBind(panel) {
+    panel.addEventListener('change', function(e) {
+      var t = e.target;
+      if (t.classList.contains('calc-p')) { if (t.checked) calc.sel[t.dataset.id] = 1; else delete calc.sel[t.dataset.id]; }
+      else if (t.classList.contains('calc-d')) { if (t.checked) calc.ded[t.dataset.id] = 1; else delete calc.ded[t.dataset.id]; }
+      else if (t.classList.contains('calc-net')) { calc.net[t.dataset.u] = t.value; }
+      else if (t.classList.contains('calc-user')) {
+        var u = (calc.data || []).find(function(x) { return String(x.user_id) === t.dataset.u; });
+        if (u) u.payments.forEach(function(p) { if (t.checked) calc.sel[p.id] = 1; else delete calc.sel[p.id]; });
+        panel.querySelectorAll('input.calc-p[data-u="' + t.dataset.u + '"]').forEach(function(cb) { cb.checked = t.checked; });
+      } else return;
+      calcSave();
+      calcRefreshNumbers(panel);
+    });
+    panel.addEventListener('input', function(e) {
+      if (!e.target.classList.contains('calc-q')) return;
+      calc.q = e.target.value;
+      calcSave();
+      var pos = e.target.selectionStart;
+      calcRender();
+      var qi = panel.querySelector('.calc-q'); qi.focus(); qi.setSelectionRange(pos, pos);
+    });
+    panel.addEventListener('click', function(e) {
+      var b = e.target.closest('button[data-act]');
+      if (!b) return;
+      var act = b.dataset.act;
+      if (act === 'reload') { calcLoad(); return; }
+      var q = calc.q.trim().toLowerCase();
+      (calc.data || []).forEach(function(u) {
+        if (q && (u.user_name || '').toLowerCase().indexOf(q) < 0 && (u.user_email || '').toLowerCase().indexOf(q) < 0) return;
+        u.payments.forEach(function(p) { if (act === 'all') calc.sel[p.id] = 1; else delete calc.sel[p.id]; });
+        if (act === 'none') (u.admin_paid || []).forEach(function(d) { delete calc.ded[d.id]; });
+      });
+      calcSave();
+      calcRender();
+    });
+  }
+  var CALC_BTN_OFF = 'px-3 py-2 rounded-lg text-sm font-medium transition text-gray-400 hover:text-white hover:bg-gray-800';
+  var CALC_BTN_ON = 'px-3 py-2 rounded-lg text-sm font-medium transition bg-emerald-600 text-white';
+  function calcExit() {
+    if (!calc.on) return;
+    calc.on = false;
+    clearInterval(calc.timer); calc.timer = null;
+    calcSave();
+    var panel = document.getElementById('calc-panel');
+    if (panel) panel.remove();
+    var main = document.querySelector('main');
+    if (main) Array.prototype.forEach.call(main.children, function(c) { if (c.dataset.calcHidden) { c.style.display = ''; delete c.dataset.calcHidden; } });
+    document.querySelectorAll('header button[data-calc-cls]').forEach(function(b) { b.className = b.dataset.calcCls; delete b.dataset.calcCls; });
+    var mine = document.querySelector('.calc-tab-btn');
+    if (mine) mine.className = 'calc-tab-btn ' + CALC_BTN_OFF;
+  }
+  function calcEnter() {
+    var main = document.querySelector('main');
+    if (!main) return;
+    calc.on = true;
+    var mine = document.querySelector('.calc-tab-btn');
+    mine.parentElement.querySelectorAll('button').forEach(function(b) {
+      if (b === mine || b.textContent.trim() === 'Logout') return;
+      if (!b.dataset.calcCls) b.dataset.calcCls = b.className;
+      b.className = CALC_BTN_OFF;
+    });
+    mine.className = 'calc-tab-btn ' + CALC_BTN_ON;
+    if (!document.getElementById('calc-panel')) {
+      var panel = document.createElement('div');
+      panel.id = 'calc-panel';
+      main.appendChild(panel);
+      calcBind(panel);
+    }
+    injectCalcTab();
+    calcSave();
+    calcLoad();
+    clearInterval(calc.timer);
+    calc.timer = setInterval(function() { if (calc.on && !document.hidden) calcLoad(true); }, 30000);
+  }
+  function injectCalcTab() {
+    var anchor = Array.prototype.find.call(document.querySelectorAll('header button'), function(b) { return b.textContent.trim() === 'Approved & Pay'; });
+    if (!anchor) return;
+    if (!document.querySelector('.calc-tab-btn')) {
+      var btn = document.createElement('button');
+      btn.className = 'calc-tab-btn ' + CALC_BTN_OFF;
+      btn.textContent = 'Calculations';
+      btn.onclick = function(e) { e.stopPropagation(); calcEnter(); };
+      anchor.parentElement.insertBefore(btn, anchor.nextSibling);
+      if (calc.wasOn) { calc.wasOn = false; setTimeout(calcEnter, 0); }
+      anchor.parentElement.addEventListener('click', function(e) {
+        var b = e.target.closest('button');
+        if (b && !b.classList.contains('calc-tab-btn')) calcExit();
+      }, true);
+    }
+    if (calc.on) {
+      var main = document.querySelector('main');
+      if (main) Array.prototype.forEach.call(main.children, function(c) {
+        if (c.id === 'calc-panel' || c.dataset.calcHidden) return;
+        c.dataset.calcHidden = '1'; c.style.display = 'none';
+      });
+    }
+  }
+
   // === MutationObserver ===
   var debounceTimer = null;
   var observer = new MutationObserver(function() {
@@ -842,6 +1270,9 @@
       injectWalletEdit();
       injectWalletQr();
       injectRevertButtons();
+      injectStatusToggle();
+      injectUsersTools();
+      injectCalcTab();
     }, 300);
   });
 
@@ -853,6 +1284,9 @@
     injectWalletEdit();
     injectWalletQr();
     injectRevertButtons();
+    injectStatusToggle();
+    injectUsersTools();
+    injectCalcTab();
   }
 
   if (document.readyState === 'loading') {

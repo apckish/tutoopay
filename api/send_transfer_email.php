@@ -66,7 +66,8 @@ $html .= '<p style="color:#4b5563;line-height:1.75;margin:0 0 20px;font-size:15p
 $html .= '<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:12px;padding:24px;text-align:center;margin:0 0 24px;">';
 $html .= '<div style="color:#6b7280;font-size:12px;text-transform:uppercase;letter-spacing:1.5px;">Amount transferred</div>';
 $html .= '<div style="color:#059669;font-size:36px;font-weight:bold;margin:8px 0 0;">' . $amount_fmt . ' USDT</div>';
-$html .= '<div style="color:#6b7280;font-size:12px;margin-top:6px;">USDT &middot; BEP20 (BSC)</div>';
+$network_label = strpos($wallet, '0x') === 0 ? 'BEP20 (BSC)' : 'TRC20 (Tron)';
+$html .= '<div style="color:#6b7280;font-size:12px;margin-top:6px;">USDT &middot; ' . $network_label . '</div>';
 $html .= '</div>';
 
 if ($wallet) {
