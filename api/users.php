@@ -106,13 +106,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['user_id'])) {
         
         // Calculate commission and payout
         $commission_amount = round($row['amount_usd'] * $commission_pct / 100, 2);
-        $exchange_fee = 2.0; // $2 exchange fee
+        $row['effective_wallet'] = ($row['wallet_address'] ?? '') ?: ($row['user_wallet_address'] ?? '');
+        // Network transfer cost: BEP20 (0x...) $1, TRC20 (T...) $5
+        $exchange_fee = strpos($row['effective_wallet'], '0x') === 0 ? 1.0 : 5.0;
         $payout = round($row['amount_usd'] - $commission_amount - $exchange_fee, 2);
         $row['commission_amount'] = $commission_amount;
         $row['exchange_fee'] = $exchange_fee;
         $row['calculated_payout'] = max(0, $payout);
-        
-        $row['effective_wallet'] = ($row['wallet_address'] ?? '') ?: ($row['user_wallet_address'] ?? '');
         $payments[] = $row;
     }
     $stmt->close();
