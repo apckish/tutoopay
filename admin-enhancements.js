@@ -84,6 +84,7 @@
   // === User ID Cache ===
   var userIdCache = {};
   var walletQrByEmail = {};
+  var walletsByEmail = {};
   var netByEmail = {};
   var paymentsByEmail = {};
   var adminPaidByEmail = {};
@@ -93,6 +94,22 @@
   var cacheTime = 0;
   var tickState = {};
   var approvedWasVisible = false;
+
+  function pickWallets(o) {
+    return {
+      bep20: { addr: o.bep20_address || '', qr: o.bep20_qr_url || '', at: o.bep20_updated_at || '' },
+      trc20: { addr: o.trc20_address || '', qr: o.trc20_qr_url || '', at: o.trc20_updated_at || '' }
+    };
+  }
+
+  function walletAgeText(at) {
+    if (!at) return 'upload time unknown';
+    var d = new Date(String(at).replace(' ', 'T'));
+    if (isNaN(d.getTime())) return 'uploaded ' + at;
+    var days = Math.floor((Date.now() - d.getTime()) / 86400000);
+    var rel = days <= 0 ? 'today' : (days === 1 ? '1 day ago' : days + ' days ago');
+    return 'uploaded ' + String(at).slice(0, 16) + ' (' + rel + ')';
+  }
 
   function buildUserIdCache(callback) {
     if (cacheBuilt) { if (callback) callback(); return; }
@@ -115,12 +132,13 @@
         var groups = (data && data.users) ? data.users : data;
         if (Array.isArray(groups)) {
           loadedOk = true;
-          walletQrByEmail = {}; netByEmail = {}; paymentsByEmail = {}; adminPaidByEmail = {};
+          walletQrByEmail = {}; walletsByEmail = {}; netByEmail = {}; paymentsByEmail = {}; adminPaidByEmail = {};
           groups.forEach(function(group) {
             if (group.user_email) {
               var key = group.user_email.toLowerCase();
               if (group.user_id) userIdCache[key] = group.user_id;
               if (group.wallet_qr_url) walletQrByEmail[key] = group.wallet_qr_url;
+              walletsByEmail[key] = pickWallets(group);
               if (group.net_usd !== undefined && group.net_usd !== null) netByEmail[key] = group.net_usd;
               paymentsByEmail[key] = Array.isArray(group.payments) ? group.payments : [];
               adminPaidByEmail[key] = Array.isArray(group.admin_paid) ? group.admin_paid : [];
@@ -138,6 +156,7 @@
               var key = u.email.toLowerCase();
               userIdCache[key] = u.id;
               if (u.wallet_qr_url && !walletQrByEmail[key]) walletQrByEmail[key] = u.wallet_qr_url;
+              if (!walletsByEmail[key]) walletsByEmail[key] = pickWallets(u);
             }
           });
         }
@@ -154,6 +173,7 @@
                   var key = u.email.toLowerCase();
                   userIdCache[key] = u.id;
                   if (u.wallet_qr_url && !walletQrByEmail[key]) walletQrByEmail[key] = u.wallet_qr_url;
+              if (!walletsByEmail[key]) walletsByEmail[key] = pickWallets(u);
                 }
               });
             }
@@ -591,36 +611,53 @@
       if (rebuildIfMissing(email.toLowerCase())) return;
 
       var qr = walletQrByEmail[email.toLowerCase()];
+      var wl = walletsByEmail[email.toLowerCase()] || pickWallets({});
+      var sig = JSON.stringify(wl) + '|' + (qr || '');
       var existing = card.querySelector('.wallet-qr-view');
       if (existing) {
-        if (existing.getAttribute('data-qr') === (qr || '')) return;
+        if (existing.getAttribute('data-qr') === sig) return;
         existing.parentNode.removeChild(existing);
       }
       var box = document.createElement('div');
       box.className = 'wallet-qr-view';
-      box.setAttribute('data-qr', qr || '');
-      box.style.cssText = 'margin:0 16px 14px; padding:12px 0; border-bottom:1px solid #374151;';
-      if (qr) {
-        var full = buildWalletQrUrl(qr);
+      box.setAttribute('data-qr', sig);
+      box.style.cssText = 'margin:0 16px 14px; padding:12px 0; border-bottom:1px solid #374151; display:flex; flex-wrap:wrap; gap:18px;';
+      var nets = [['bep20', 'BEP20 ($1)'], ['trc20', 'TRC20 ($5)']];
+      if (!wl.bep20.qr && !wl.trc20.qr && qr) wl.bep20 = { addr: '', qr: qr, at: '' };
+      nets.forEach(function(n) {
+        var w = wl[n[0]];
+        var col = document.createElement('div');
+        col.style.cssText = 'min-width:170px; max-width:260px;';
         var label = document.createElement('div');
-        label.style.cssText = 'font-size:12px; color:#9ca3af; margin-bottom:6px; font-weight:600;';
-        label.textContent = 'Wallet QR (uploaded by user)';
-        var img = document.createElement('img');
-        img.src = full;
-        img.alt = 'Wallet QR';
-        img.style.cssText = 'max-width:160px; max-height:160px; border-radius:8px; border:1px solid #374151; background:#fff; padding:4px; display:block; cursor:zoom-in;';
-        img.onclick = (function(cardEl, emailKey) {
-          return function(e) {
-            e.stopPropagation();
-            e.preventDefault();
-            showQrModal(full, extractNetPayout(cardEl), emailKey);
-          };
-        })(card, email.toLowerCase());
-        box.appendChild(label);
-        box.appendChild(img);
-      } else {
-        box.innerHTML = '<div style="font-size:12px; color:#6b7280;">No wallet QR photo uploaded by this user.</div>';
-      }
+        label.style.cssText = 'font-size:12px; color:#9ca3af; margin-bottom:4px; font-weight:600;';
+        label.textContent = 'Wallet QR ' + n[1];
+        col.appendChild(label);
+        if (w.qr) {
+          var full = buildWalletQrUrl(w.qr);
+          var meta = document.createElement('div');
+          meta.style.cssText = 'font-size:11px; color:#d1d5db; margin-bottom:6px; word-break:break-all;';
+          meta.textContent = (w.addr ? w.addr + ' \u00b7 ' : '') + walletAgeText(w.at);
+          var img = document.createElement('img');
+          img.src = full;
+          img.alt = 'Wallet QR ' + n[0].toUpperCase();
+          img.style.cssText = 'max-width:160px; max-height:160px; border-radius:8px; border:1px solid #374151; background:#fff; padding:4px; display:block; cursor:zoom-in;';
+          img.onclick = (function(cardEl, emailKey, url) {
+            return function(e) {
+              e.stopPropagation();
+              e.preventDefault();
+              showQrModal(url, extractNetPayout(cardEl), emailKey);
+            };
+          })(card, email.toLowerCase(), full);
+          col.appendChild(meta);
+          col.appendChild(img);
+        } else {
+          var none = document.createElement('div');
+          none.style.cssText = 'font-size:12px; color:#f87171;';
+          none.textContent = 'Not uploaded yet';
+          col.appendChild(none);
+        }
+        box.appendChild(col);
+      });
       panel.insertBefore(box, panel.firstChild);
     });
   }

@@ -154,7 +154,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['user_id'])) {
     ]);
 }
 
-$result = $db->query("SELECT id, full_name, email, wallet_address, wallet_name, whitelisted, whatsapp_number, telegram_id, status, commission_pct FROM users ORDER BY id DESC");
+$result = $db->query("SELECT id, full_name, email, wallet_address, wallet_name, wallet_qr_url, bep20_address, bep20_qr_url, bep20_updated_at, trc20_address, trc20_qr_url, trc20_updated_at, whitelisted, whatsapp_number, telegram_id, status, commission_pct FROM users ORDER BY id DESC");
 $users = [];
 while ($row = $result->fetch_assoc()) {
     $users[] = $row;
