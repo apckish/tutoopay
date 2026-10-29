@@ -1030,15 +1030,26 @@
   }
 
   // === Calculations tab: approved+unpaid grouped by teacher, multi-select gross/net ===
-  var calc = { on: false, data: null, sel: {}, ded: {}, net: {}, q: '', loading: false, err: '' };
+  var calc = { on: false, data: null, sel: {}, ded: {}, net: {}, q: '', loading: false, err: '', timer: null };
+  var CALC_KEY = 'tp_calc_state_v1';
+  try { var cs = JSON.parse(localStorage.getItem(CALC_KEY) || '{}'); ['sel', 'ded', 'net'].forEach(function(k) { if (cs[k] && typeof cs[k] === 'object') calc[k] = cs[k]; }); calc.q = cs.q || ''; calc.wasOn = !!cs.on; } catch (e) {}
+  function calcSave() {
+    try { localStorage.setItem(CALC_KEY, JSON.stringify({ sel: calc.sel, ded: calc.ded, net: calc.net, q: calc.q, on: calc.on })); } catch (e) {}
+  }
+  function calcPrune() {
+    var ids = {}, dids = {};
+    (calc.data || []).forEach(function(u) {
+      u.payments.forEach(function(p) { ids[p.id] = 1; });
+      (u.admin_paid || []).forEach(function(d) { dids[d.id] = 1; });
+    });
+    Object.keys(calc.sel).forEach(function(k) { if (!ids[k]) delete calc.sel[k]; });
+    Object.keys(calc.ded).forEach(function(k) { if (!dids[k]) delete calc.ded[k]; });
+    calcSave();
+  }
   function calcEsc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function(c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
   function r2(n) { return Math.round(n * 100) / 100; }
   function usd(n) { return '$' + r2(n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
-  function calcDefaultNet(u) {
-    if (u.bep20_address) return 'BEP20';
-    if (u.trc20_address) return 'TRC20';
-    return (u.user_wallet_address || '').indexOf('T') === 0 ? 'TRC20' : 'BEP20';
-  }
+  function calcDefaultNet() { return 'TRC20'; }
   function calcUserTotals(u) {
     var gross = 0, n = 0, ded = 0;
     u.payments.forEach(function(p) { if (calc.sel[p.id]) { gross += Number(p.amount_usd) || 0; n++; } });
@@ -1047,13 +1058,23 @@
     var fee = n ? ((calc.net[u.user_id] || calcDefaultNet(u)) === 'TRC20' ? 5 : 1) : 0;
     return { n: n, gross: r2(gross), comm: comm, fee: fee, ded: r2(ded), net: n ? Math.max(0, r2(gross - comm - fee - ded)) : 0 };
   }
-  function calcLoad() {
-    calc.loading = true; calc.err = ''; calcRender();
+  function calcLoad(silent) {
+    if (calc.loading) return;
+    calc.loading = true;
+    if (!silent) { calc.err = ''; calcRender(); }
     fetch('/api/approved_grouped.php', { credentials: 'same-origin' })
       .then(function(r) { return r.json().then(function(d) { if (!r.ok) throw new Error(d.detail || d.error || 'Failed to load'); return d; }); })
-      .then(function(d) { calc.data = (d.users || []).filter(function(u) { return u.payments && u.payments.length; }); })
-      .catch(function(e) { calc.err = e.message; })
-      .finally(function() { calc.loading = false; calcRender(); });
+      .then(function(d) { calc.data = (d.users || []).filter(function(u) { return u.payments && u.payments.length; }); calc.err = ''; calcPrune(); })
+      .catch(function(e) { if (!silent || !calc.data) calc.err = e.message; })
+      .finally(function() {
+        calc.loading = false;
+        if (!calc.on) return;
+        var ae = document.activeElement, panel = document.getElementById('calc-panel');
+        var typing = ae && ae.classList && ae.classList.contains('calc-q') ? ae.selectionStart : -1;
+        if (silent && ae && ae.tagName === 'SELECT' && panel && panel.contains(ae)) return;
+        calcRender();
+        if (typing >= 0) { var qi = document.querySelector('#calc-panel .calc-q'); if (qi) { qi.focus(); qi.setSelectionRange(typing, typing); } }
+      });
   }
   function calcSummary() {
     var t = { people: 0, n: 0, gross: 0, comm: 0, fee: 0, ded: 0, net: 0 };
@@ -1146,11 +1167,13 @@
         if (u) u.payments.forEach(function(p) { if (t.checked) calc.sel[p.id] = 1; else delete calc.sel[p.id]; });
         panel.querySelectorAll('input.calc-p[data-u="' + t.dataset.u + '"]').forEach(function(cb) { cb.checked = t.checked; });
       } else return;
+      calcSave();
       calcRefreshNumbers(panel);
     });
     panel.addEventListener('input', function(e) {
       if (!e.target.classList.contains('calc-q')) return;
       calc.q = e.target.value;
+      calcSave();
       var pos = e.target.selectionStart;
       calcRender();
       var qi = panel.querySelector('.calc-q'); qi.focus(); qi.setSelectionRange(pos, pos);
@@ -1159,13 +1182,14 @@
       var b = e.target.closest('button[data-act]');
       if (!b) return;
       var act = b.dataset.act;
-      if (act === 'reload') { calc.sel = {}; calc.ded = {}; calcLoad(); return; }
+      if (act === 'reload') { calcLoad(); return; }
       var q = calc.q.trim().toLowerCase();
       (calc.data || []).forEach(function(u) {
         if (q && (u.user_name || '').toLowerCase().indexOf(q) < 0 && (u.user_email || '').toLowerCase().indexOf(q) < 0) return;
         u.payments.forEach(function(p) { if (act === 'all') calc.sel[p.id] = 1; else delete calc.sel[p.id]; });
         if (act === 'none') (u.admin_paid || []).forEach(function(d) { delete calc.ded[d.id]; });
       });
+      calcSave();
       calcRender();
     });
   }
@@ -1174,6 +1198,8 @@
   function calcExit() {
     if (!calc.on) return;
     calc.on = false;
+    clearInterval(calc.timer); calc.timer = null;
+    calcSave();
     var panel = document.getElementById('calc-panel');
     if (panel) panel.remove();
     var main = document.querySelector('main');
@@ -1200,7 +1226,10 @@
       calcBind(panel);
     }
     injectCalcTab();
+    calcSave();
     calcLoad();
+    clearInterval(calc.timer);
+    calc.timer = setInterval(function() { if (calc.on && !document.hidden) calcLoad(true); }, 30000);
   }
   function injectCalcTab() {
     var anchor = Array.prototype.find.call(document.querySelectorAll('header button'), function(b) { return b.textContent.trim() === 'Approved & Pay'; });
@@ -1211,6 +1240,7 @@
       btn.textContent = 'Calculations';
       btn.onclick = function(e) { e.stopPropagation(); calcEnter(); };
       anchor.parentElement.insertBefore(btn, anchor.nextSibling);
+      if (calc.wasOn) { calc.wasOn = false; setTimeout(calcEnter, 0); }
       anchor.parentElement.addEventListener('click', function(e) {
         var b = e.target.closest('button');
         if (b && !b.classList.contains('calc-tab-btn')) calcExit();
