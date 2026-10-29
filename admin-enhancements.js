@@ -3,7 +3,9 @@
 
   // === CSS Fix: Allow dropdowns in tables to overflow visibly ===
   var style = document.createElement('style');
-  style.textContent = '.overflow-x-auto { overflow: visible !important; }';
+  style.textContent = '.max-w-7xl { max-width: 1920px !important; }' +
+    ' .overflow-x-auto { overflow-x: auto !important; max-width: 100%; }' +
+    ' .overflow-x-auto:has(.absolute) { overflow: visible !important; }';
   document.head.appendChild(style);
 
   // === Intercept fetch to refresh balance after payments ===
