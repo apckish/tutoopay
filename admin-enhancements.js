@@ -871,9 +871,22 @@
     if (!h2) return;
     var table = h2.closest('div').parentElement.querySelector('table');
     if (!table) return;
+    table.querySelectorAll('thead th').forEach(function(th) { if (th.style.padding !== '8px 6px') th.style.padding = '8px 6px'; });
     table.querySelectorAll('tbody > tr').forEach(function(tr) {
       var tds = tr.children;
       if (tds.length < 10) return;
+      if (!tr.dataset.compact) {
+        tr.dataset.compact = '1';
+        Array.prototype.forEach.call(tds, function(td) { td.style.padding = '8px 6px'; });
+        tds[2].style.cssText += 'max-width:190px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;';
+      }
+      if (tds[2].title !== tds[2].textContent) tds[2].title = tds[2].textContent;
+      var wspan = tds[5].querySelector('span');
+      if (wspan && !wspan.dataset.compact) {
+        wspan.dataset.compact = '1';
+        wspan.style.cssText += 'display:inline-block; max-width:130px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; vertical-align:middle;';
+        wspan.title = wspan.textContent + ' (click to edit)';
+      }
       var id = parseInt(tds[0].textContent.trim(), 10);
       if (!id) return;
       var badge = tds[8].querySelector('span');
