@@ -1029,6 +1029,202 @@
     });
   }
 
+  // === Calculations tab: approved+unpaid grouped by teacher, multi-select gross/net ===
+  var calc = { on: false, data: null, sel: {}, ded: {}, net: {}, q: '', loading: false, err: '' };
+  function calcEsc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function(c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+  function r2(n) { return Math.round(n * 100) / 100; }
+  function usd(n) { return '$' + r2(n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
+  function calcDefaultNet(u) {
+    if (u.bep20_address) return 'BEP20';
+    if (u.trc20_address) return 'TRC20';
+    return (u.user_wallet_address || '').indexOf('T') === 0 ? 'TRC20' : 'BEP20';
+  }
+  function calcUserTotals(u) {
+    var gross = 0, n = 0, ded = 0;
+    u.payments.forEach(function(p) { if (calc.sel[p.id]) { gross += Number(p.amount_usd) || 0; n++; } });
+    (u.admin_paid || []).forEach(function(d) { if (calc.ded[d.id]) ded += Number(d.usdt_amount) || 0; });
+    var comm = r2(gross * (Number(u.commission_pct) / 100));
+    var fee = n ? ((calc.net[u.user_id] || calcDefaultNet(u)) === 'TRC20' ? 5 : 1) : 0;
+    return { n: n, gross: r2(gross), comm: comm, fee: fee, ded: r2(ded), net: n ? Math.max(0, r2(gross - comm - fee - ded)) : 0 };
+  }
+  function calcLoad() {
+    calc.loading = true; calc.err = ''; calcRender();
+    fetch('/api/approved_grouped.php', { credentials: 'same-origin' })
+      .then(function(r) { return r.json().then(function(d) { if (!r.ok) throw new Error(d.detail || d.error || 'Failed to load'); return d; }); })
+      .then(function(d) { calc.data = (d.users || []).filter(function(u) { return u.payments && u.payments.length; }); })
+      .catch(function(e) { calc.err = e.message; })
+      .finally(function() { calc.loading = false; calcRender(); });
+  }
+  function calcSummary() {
+    var t = { people: 0, n: 0, gross: 0, comm: 0, fee: 0, ded: 0, net: 0 };
+    (calc.data || []).forEach(function(u) {
+      var x = calcUserTotals(u);
+      if (!x.n) return;
+      t.people++; t.n += x.n; t.gross += x.gross; t.comm += x.comm; t.fee += x.fee; t.ded += x.ded; t.net += x.net;
+    });
+    return t;
+  }
+  function calcSummaryHtml() {
+    var t = calcSummary();
+    var cell = function(label, val, color, big) {
+      return '<div style="min-width:120px"><div style="font-size:11px; color:#9ca3af; text-transform:uppercase; letter-spacing:.04em">' + label + '</div>' +
+        '<div style="font-size:' + (big ? 26 : 20) + 'px; font-weight:700; color:' + color + '">' + val + '</div></div>';
+    };
+    return cell('Selected', t.n + ' payment' + (t.n === 1 ? '' : 's') + ' · ' + t.people + ' ' + (t.people === 1 ? 'person' : 'people'), '#e5e7eb') +
+      cell('Gross', usd(t.gross), '#60a5fa', true) +
+      cell('Commission', '−' + usd(t.comm), '#fbbf24') +
+      cell('Transfer fees', '−' + usd(t.fee), '#fbbf24') +
+      (t.ded ? cell('Already paid (deducted)', '−' + usd(t.ded), '#f87171') : '') +
+      cell('Net payout', usd(t.net), '#34d399', true);
+  }
+  function calcRefreshNumbers(panel) {
+    var s = panel.querySelector('.calc-summary');
+    if (s) s.innerHTML = calcSummaryHtml();
+    (calc.data || []).forEach(function(u) {
+      var x = calcUserTotals(u);
+      var el = panel.querySelector('.calc-sub[data-u="' + u.user_id + '"]');
+      if (el) el.innerHTML = x.n ? (x.n + ' selected · gross <b style="color:#60a5fa">' + usd(x.gross) + '</b> · comm ' + Number(u.commission_pct) + '% −' + usd(x.comm) +
+        ' · fee −' + usd(x.fee) + (x.ded ? ' · paid −' + usd(x.ded) : '') + ' · net <b style="color:#34d399">' + usd(x.net) + '</b>') : '<span style="color:#6b7280">nothing selected</span>';
+      var all = panel.querySelector('input.calc-user[data-u="' + u.user_id + '"]');
+      if (all) { all.checked = x.n === u.payments.length; all.indeterminate = x.n > 0 && x.n < u.payments.length; }
+    });
+  }
+  function calcRender() {
+    var panel = document.getElementById('calc-panel');
+    if (!panel) return;
+    var head = '<div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; margin-bottom:12px">' +
+      '<h2 class="text-lg font-semibold">Calculations — approved, not paid' + (calc.data ? ' (' + calc.data.length + ' people)' : '') + '</h2>' +
+      '<div style="display:flex; gap:8px; align-items:center">' +
+      '<input class="calc-q" placeholder="Search name or email..." value="' + calcEsc(calc.q) + '" style="background:#1f2937; border:1px solid #374151; border-radius:8px; padding:6px 10px; color:#fff; font-size:13px; width:220px">' +
+      '<button data-act="all" style="background:#065f46; color:#d1fae5; border-radius:8px; padding:6px 12px; font-size:13px">Select all</button>' +
+      '<button data-act="none" style="background:#374151; color:#e5e7eb; border-radius:8px; padding:6px 12px; font-size:13px">Clear</button>' +
+      '<button data-act="reload" style="background:#1d4ed8; color:#fff; border-radius:8px; padding:6px 12px; font-size:13px">Refresh</button></div></div>' +
+      '<div class="calc-summary" style="position:sticky; top:0; z-index:5; display:flex; gap:24px; flex-wrap:wrap; background:#111827; border:1px solid #065f46; border-radius:12px; padding:14px 18px; margin-bottom:14px"></div>';
+    if (calc.loading) { panel.innerHTML = head + '<p style="color:#9ca3af">Loading...</p>'; return; }
+    if (calc.err) { panel.innerHTML = head + '<p style="color:#f87171">' + calcEsc(calc.err) + '</p>'; return; }
+    var q = calc.q.trim().toLowerCase();
+    var list = (calc.data || []).filter(function(u) { return !q || (u.user_name || '').toLowerCase().indexOf(q) >= 0 || (u.user_email || '').toLowerCase().indexOf(q) >= 0; });
+    var body = list.map(function(u) {
+      var netw = calc.net[u.user_id] || calcDefaultNet(u);
+      var rows = u.payments.map(function(p) {
+        return '<tr style="border-top:1px solid #1f2937">' +
+          '<td style="padding:6px"><input type="checkbox" class="calc-p" data-u="' + u.user_id + '" data-id="' + p.id + '"' + (calc.sel[p.id] ? ' checked' : '') + '></td>' +
+          '<td style="padding:6px; color:#9ca3af">#' + p.id + '</td>' +
+          '<td style="padding:6px">' + calcEsc((p.date || '').slice(0, 10)) + '</td>' +
+          '<td style="padding:6px">' + calcEsc(p.payment_method) + '</td>' +
+          '<td style="padding:6px; color:#9ca3af">' + calcEsc(p.sender_name) + '</td>' +
+          '<td style="padding:6px; text-align:right">' + calcEsc(Number(p.approved_amount).toFixed(2) + ' ' + (p.approved_currency || '')) + '</td>' +
+          '<td style="padding:6px; text-align:right; color:#60a5fa; font-weight:600">' + usd(Number(p.amount_usd) || 0) + '</td></tr>';
+      }).join('');
+      var deds = (u.admin_paid || []).map(function(d) {
+        return '<tr style="border-top:1px solid #1f2937; color:#fca5a5">' +
+          '<td style="padding:6px"><input type="checkbox" class="calc-d" data-id="' + d.id + '"' + (calc.ded[d.id] ? ' checked' : '') + '></td>' +
+          '<td style="padding:6px" colspan="5">Already paid (' + calcEsc(d.action) + ', ' + calcEsc((d.created_at || '').slice(0, 10)) + ') — tick to deduct</td>' +
+          '<td style="padding:6px; text-align:right">−' + usd(Number(d.usdt_amount) || 0) + '</td></tr>';
+      }).join('');
+      return '<div style="background:#111827; border:1px solid #1f2937; border-radius:12px; padding:12px 14px; margin-bottom:10px">' +
+        '<div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap">' +
+        '<input type="checkbox" class="calc-user" data-u="' + u.user_id + '" title="Select all payments of this person">' +
+        '<b style="color:#fff">' + calcEsc(u.user_name) + '</b><span style="color:#6b7280; font-size:12px">' + calcEsc(u.user_email) + ' · ' + u.payments.length + ' payment' + (u.payments.length === 1 ? '' : 's') + ' · total ' + usd(Number(u.total_approved_usd) || 0) + '</span>' +
+        '<select class="calc-net" data-u="' + u.user_id + '" style="margin-left:auto; background:#1f2937; color:#e5e7eb; border:1px solid #374151; border-radius:6px; font-size:12px; padding:2px 6px">' +
+        '<option value="BEP20"' + (netw === 'BEP20' ? ' selected' : '') + '>BEP20 fee $1' + (u.bep20_address ? '' : ' (no wallet)') + '</option>' +
+        '<option value="TRC20"' + (netw === 'TRC20' ? ' selected' : '') + '>TRC20 fee $5' + (u.trc20_address ? '' : ' (no wallet)') + '</option></select></div>' +
+        '<table style="width:100%; font-size:12px; margin-top:8px"><tbody>' + rows + deds + '</tbody></table>' +
+        '<div class="calc-sub" data-u="' + u.user_id + '" style="font-size:12px; color:#d1d5db; margin-top:6px; text-align:right"></div></div>';
+    }).join('');
+    panel.innerHTML = head + (list.length ? body : '<p style="color:#9ca3af">No approved unpaid payments.</p>');
+    calcRefreshNumbers(panel);
+  }
+  function calcBind(panel) {
+    panel.addEventListener('change', function(e) {
+      var t = e.target;
+      if (t.classList.contains('calc-p')) { if (t.checked) calc.sel[t.dataset.id] = 1; else delete calc.sel[t.dataset.id]; }
+      else if (t.classList.contains('calc-d')) { if (t.checked) calc.ded[t.dataset.id] = 1; else delete calc.ded[t.dataset.id]; }
+      else if (t.classList.contains('calc-net')) { calc.net[t.dataset.u] = t.value; }
+      else if (t.classList.contains('calc-user')) {
+        var u = (calc.data || []).find(function(x) { return String(x.user_id) === t.dataset.u; });
+        if (u) u.payments.forEach(function(p) { if (t.checked) calc.sel[p.id] = 1; else delete calc.sel[p.id]; });
+        panel.querySelectorAll('input.calc-p[data-u="' + t.dataset.u + '"]').forEach(function(cb) { cb.checked = t.checked; });
+      } else return;
+      calcRefreshNumbers(panel);
+    });
+    panel.addEventListener('input', function(e) {
+      if (!e.target.classList.contains('calc-q')) return;
+      calc.q = e.target.value;
+      var pos = e.target.selectionStart;
+      calcRender();
+      var qi = panel.querySelector('.calc-q'); qi.focus(); qi.setSelectionRange(pos, pos);
+    });
+    panel.addEventListener('click', function(e) {
+      var b = e.target.closest('button[data-act]');
+      if (!b) return;
+      var act = b.dataset.act;
+      if (act === 'reload') { calc.sel = {}; calc.ded = {}; calcLoad(); return; }
+      var q = calc.q.trim().toLowerCase();
+      (calc.data || []).forEach(function(u) {
+        if (q && (u.user_name || '').toLowerCase().indexOf(q) < 0 && (u.user_email || '').toLowerCase().indexOf(q) < 0) return;
+        u.payments.forEach(function(p) { if (act === 'all') calc.sel[p.id] = 1; else delete calc.sel[p.id]; });
+        if (act === 'none') (u.admin_paid || []).forEach(function(d) { delete calc.ded[d.id]; });
+      });
+      calcRender();
+    });
+  }
+  var CALC_BTN_OFF = 'px-3 py-2 rounded-lg text-sm font-medium transition text-gray-400 hover:text-white hover:bg-gray-800';
+  var CALC_BTN_ON = 'px-3 py-2 rounded-lg text-sm font-medium transition bg-emerald-600 text-white';
+  function calcExit() {
+    if (!calc.on) return;
+    calc.on = false;
+    var panel = document.getElementById('calc-panel');
+    if (panel) panel.remove();
+    var main = document.querySelector('main');
+    if (main) Array.prototype.forEach.call(main.children, function(c) { if (c.dataset.calcHidden) { c.style.display = ''; delete c.dataset.calcHidden; } });
+    document.querySelectorAll('header button[data-calc-cls]').forEach(function(b) { b.className = b.dataset.calcCls; delete b.dataset.calcCls; });
+    var mine = document.querySelector('.calc-tab-btn');
+    if (mine) mine.className = 'calc-tab-btn ' + CALC_BTN_OFF;
+  }
+  function calcEnter() {
+    var main = document.querySelector('main');
+    if (!main) return;
+    calc.on = true;
+    var mine = document.querySelector('.calc-tab-btn');
+    mine.parentElement.querySelectorAll('button').forEach(function(b) {
+      if (b === mine || b.textContent.trim() === 'Logout') return;
+      if (!b.dataset.calcCls) b.dataset.calcCls = b.className;
+      b.className = CALC_BTN_OFF;
+    });
+    mine.className = 'calc-tab-btn ' + CALC_BTN_ON;
+    if (!document.getElementById('calc-panel')) {
+      var panel = document.createElement('div');
+      panel.id = 'calc-panel';
+      main.appendChild(panel);
+      calcBind(panel);
+    }
+    injectCalcTab();
+    calcLoad();
+  }
+  function injectCalcTab() {
+    var anchor = Array.prototype.find.call(document.querySelectorAll('header button'), function(b) { return b.textContent.trim() === 'Approved & Pay'; });
+    if (!anchor) return;
+    if (!document.querySelector('.calc-tab-btn')) {
+      var btn = document.createElement('button');
+      btn.className = 'calc-tab-btn ' + CALC_BTN_OFF;
+      btn.textContent = 'Calculations';
+      btn.onclick = function(e) { e.stopPropagation(); calcEnter(); };
+      anchor.parentElement.insertBefore(btn, anchor.nextSibling);
+      anchor.parentElement.addEventListener('click', function(e) {
+        var b = e.target.closest('button');
+        if (b && !b.classList.contains('calc-tab-btn')) calcExit();
+      }, true);
+    }
+    if (calc.on) {
+      var main = document.querySelector('main');
+      if (main) Array.prototype.forEach.call(main.children, function(c) {
+        if (c.id === 'calc-panel' || c.dataset.calcHidden) return;
+        c.dataset.calcHidden = '1'; c.style.display = 'none';
+      });
+    }
+  }
+
   // === MutationObserver ===
   var debounceTimer = null;
   var observer = new MutationObserver(function() {
@@ -1046,6 +1242,7 @@
       injectRevertButtons();
       injectStatusToggle();
       injectUsersTools();
+      injectCalcTab();
     }, 300);
   });
 
@@ -1059,6 +1256,7 @@
     injectRevertButtons();
     injectStatusToggle();
     injectUsersTools();
+    injectCalcTab();
   }
 
   if (document.readyState === 'loading') {
