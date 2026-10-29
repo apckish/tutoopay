@@ -915,7 +915,7 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ status: next })
           }).then(function(r) { return r.json().then(function(d) { if (!r.ok) throw new Error(d.detail || d.error || 'Failed'); return d; }); })
-            .then(function() { statusOverride[id] = next; injectStatusToggle(); })
+            .then(function() { statusOverride[id] = next; injectStatusToggle(); injectUsersTools(); })
             .catch(function(err) { alert('Error: ' + err.message); })
             .finally(function() { btn.disabled = false; });
         };
@@ -928,6 +928,104 @@
           ? 'background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.3);'
           : 'background: rgba(16,185,129,0.15); color: #34d399; border: 1px solid rgba(16,185,129,0.3);';
       }
+    });
+  }
+
+  // === Users tab: status counts, status filter, column sort ===
+  var usersFilter = 'all';
+  var usersSort = { col: -1, dir: 1 };
+  function usersRowStatus(tds) {
+    var id = parseInt(tds[0].textContent.trim(), 10);
+    var b = tds[8].querySelector('span');
+    return statusOverride[id] || (b ? b.textContent.trim() : '');
+  }
+  function usersSortKey(tds, col) {
+    var t = (tds[col].querySelector('input') ? tds[col].querySelector('input').value : tds[col].textContent).trim();
+    if (col === 0 || col === 7) return parseFloat(t) || 0;
+    if (col === 8) return usersRowStatus(tds);
+    return t.toLowerCase();
+  }
+  function injectUsersTools() {
+    var h2 = Array.prototype.find.call(document.querySelectorAll('h2'), function(h) { return /^Users \(\d+\)$/.test(h.textContent.trim()); });
+    if (!h2) return;
+    var root = h2.closest('div').parentElement;
+    var frame = root.querySelector('.overflow-x-auto');
+    var table = frame && frame.querySelector('table');
+    var tbody = table && table.querySelector('tbody');
+    if (!tbody) return;
+
+    var groups = [];
+    Array.prototype.forEach.call(tbody.children, function(tr) {
+      if (tr.children.length >= 10) groups.push({ main: tr, rows: [tr] });
+      else if (groups.length) groups[groups.length - 1].rows.push(tr);
+    });
+
+    var nActive = 0, nInactive = 0;
+    groups.forEach(function(g) {
+      var st = usersRowStatus(g.main.children);
+      if (st === 'active') nActive++; else nInactive++;
+      var show = usersFilter === 'all' || (usersFilter === 'active' ? st === 'active' : st !== 'active');
+      g.rows.forEach(function(r) { var d = show ? '' : 'none'; if (r.style.display !== d) r.style.display = d; });
+    });
+
+    if (usersSort.col >= 0) {
+      var sorted = groups.slice().sort(function(a, b) {
+        var ka = usersSortKey(a.main.children, usersSort.col), kb = usersSortKey(b.main.children, usersSort.col);
+        return (ka < kb ? -1 : ka > kb ? 1 : 0) * usersSort.dir;
+      });
+      var flat = [];
+      sorted.forEach(function(g) { flat = flat.concat(g.rows); });
+      var inOrder = flat.every(function(r, i) { return tbody.children[i] === r; });
+      if (!inOrder) flat.forEach(function(r) { tbody.appendChild(r); });
+    }
+
+    var bar = root.querySelector('.users-status-bar');
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.className = 'users-status-bar';
+      bar.style.cssText = 'display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:0 0 12px 0; font-size:13px;';
+      frame.parentElement.insertBefore(bar, frame);
+      bar.onclick = function(e) {
+        var b = e.target.closest('button[data-f]');
+        if (!b) return;
+        usersFilter = b.getAttribute('data-f');
+        bar.dataset.sig = '';
+        injectUsersTools();
+      };
+    }
+    var shown = usersFilter === 'all' ? groups.length : (usersFilter === 'active' ? nActive : nInactive);
+    var sig = [usersFilter, groups.length, nActive, nInactive].join('|');
+    if (bar.dataset.sig !== sig) {
+      bar.dataset.sig = sig;
+      var pill = function(f, label, n, color) {
+        var on = usersFilter === f;
+        return '<button data-f="' + f + '" style="padding:4px 12px; border-radius:999px; cursor:pointer; font-weight:600; border:1px solid ' + color + '; ' +
+          (on ? 'background:' + color + '; color:#0b0f19;' : 'background:transparent; color:' + color + ';') + '">' + label + ' <b>' + n + '</b></button>';
+      };
+      bar.innerHTML = pill('all', 'All', groups.length, '#9ca3af') + pill('active', 'Active', nActive, '#34d399') + pill('inactive', 'Disabled', nInactive, '#f87171') +
+        '<span style="color:#6b7280; margin-left:6px;">Showing ' + shown + ' · click a column header to sort</span>';
+    }
+
+    var sortable = { 0: 1, 1: 1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1, 7: 1, 8: 1 };
+    table.querySelectorAll('thead th').forEach(function(th, i) {
+      if (!sortable[i]) return;
+      if (!th.dataset.sortable) {
+        th.dataset.sortable = '1';
+        th.style.cursor = 'pointer';
+        th.style.userSelect = 'none';
+        th.title = 'Click to sort';
+        th.addEventListener('click', function() {
+          if (usersSort.col === i) usersSort.dir = -usersSort.dir; else { usersSort.col = i; usersSort.dir = 1; }
+          injectUsersTools();
+        });
+        var ind = document.createElement('span');
+        ind.className = 'sort-ind';
+        ind.style.cssText = 'margin-left:4px; color:#34d399;';
+        th.appendChild(ind);
+      }
+      var ind2 = th.querySelector('.sort-ind');
+      var txt = usersSort.col === i ? (usersSort.dir === 1 ? '▲' : '▼') : '';
+      if (ind2 && ind2.textContent !== txt) ind2.textContent = txt;
     });
   }
 
@@ -947,6 +1045,7 @@
       injectWalletQr();
       injectRevertButtons();
       injectStatusToggle();
+      injectUsersTools();
     }, 300);
   });
 
@@ -959,6 +1058,7 @@
     injectWalletQr();
     injectRevertButtons();
     injectStatusToggle();
+    injectUsersTools();
   }
 
   if (document.readyState === 'loading') {
