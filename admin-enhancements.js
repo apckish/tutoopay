@@ -674,10 +674,47 @@
           none.textContent = 'Not uploaded yet';
           col.appendChild(none);
         }
+        if (w.addr) {
+          var cp = document.createElement('button');
+          cp.type = 'button';
+          cp.textContent = 'Copy address';
+          cp.style.cssText = 'margin-top:8px; padding:4px 10px; font-size:12px; border-radius:6px; border:1px solid #4b5563; background:#1f2937; color:#e5e7eb; cursor:pointer;';
+          cp.onclick = (function(addr, btn) {
+            return function(e) {
+              e.stopPropagation();
+              e.preventDefault();
+              copyText(addr, function(ok) {
+                btn.textContent = ok ? 'Address copied' : 'Copy failed';
+                btn.style.color = ok ? '#34d399' : '#f87171';
+                setTimeout(function() { btn.textContent = 'Copy address'; btn.style.color = '#e5e7eb'; }, 1800);
+              });
+            };
+          })(w.addr, cp);
+          col.appendChild(cp);
+        }
         box.appendChild(col);
       });
       panel.insertBefore(box, panel.firstChild);
     });
+  }
+
+  function copyText(text, done) {
+    function fallback() {
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.cssText = 'position:fixed; top:-1000px; opacity:0;';
+      document.body.appendChild(ta);
+      ta.select();
+      var ok = false;
+      try { ok = document.execCommand('copy'); } catch (e) {}
+      document.body.removeChild(ta);
+      done(ok);
+    }
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(function() { done(true); }, fallback);
+    } else {
+      fallback();
+    }
   }
 
   // === Bridge to the Approved & Pay card state exposed by the compiled bundle ===
