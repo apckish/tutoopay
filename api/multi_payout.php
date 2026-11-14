@@ -124,6 +124,7 @@ $total_approved_usd = round($total_approved_usd, 2);
 $total_deductions = round($total_deductions, 2);
 $commission_amount = round($total_approved_usd * ($commission_pct / 100), 2);
 $payout_amount = round($total_approved_usd - $commission_amount - $exchange_fee - $total_deductions, 2);
+if ($manual && $payout_amount < 0) $payout_amount = 0.0;
 
 $admin_user = $_SESSION['admin_username'] ?? 'admin';
 $group_id = 'grp_' . time() . '_' . $user_id;
