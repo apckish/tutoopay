@@ -94,13 +94,13 @@
   var cacheBuilding = false;
   var cacheCallbacks = [];
   var cacheTime = 0;
-  var tickState = {};
   var approvedWasVisible = false;
 
   function pickWallets(o) {
     return {
       bep20: { addr: o.bep20_address || '', qr: o.bep20_qr_url || '', at: o.bep20_updated_at || '' },
-      trc20: { addr: o.trc20_address || '', qr: o.trc20_qr_url || '', at: o.trc20_updated_at || '' }
+      trc20: { addr: o.trc20_address || '', qr: o.trc20_qr_url || '', at: o.trc20_updated_at || '' },
+      legacy: o.user_wallet_address || o.wallet_address || ''
     };
   }
 
@@ -238,7 +238,7 @@
   }
 
   // === Fullscreen modal for the wallet QR image ===
-  function showQrModal(url, netText, email) {
+  function showQrModal(url, netText, email, wallet) {
     var existing = document.getElementById('wallet-qr-modal');
     if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
 
@@ -297,7 +297,7 @@
           method: 'POST',
           credentials: 'same-origin',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: email, amount: amount })
+          body: JSON.stringify({ email: email, amount: amount, wallet_address: wallet || '' })
         })
           .then(function(r) { return r.json(); })
           .then(function(d) {
@@ -614,7 +614,9 @@
 
       var qr = walletQrByEmail[email.toLowerCase()];
       var wl = walletsByEmail[email.toLowerCase()] || pickWallets({});
-      var sig = JSON.stringify(wl) + '|' + (qr || '');
+      var cur = curCard(email);
+      var selNet = cur ? cur.net : '';
+      var sig = JSON.stringify(wl) + '|' + (qr || '') + '|' + selNet;
       var existing = card.querySelector('.wallet-qr-view');
       if (existing) {
         if (existing.getAttribute('data-qr') === sig) return;
@@ -624,15 +626,24 @@
       box.className = 'wallet-qr-view';
       box.setAttribute('data-qr', sig);
       box.style.cssText = 'margin:0 16px 14px; padding:12px 0; border-bottom:1px solid #374151; display:flex; flex-wrap:wrap; gap:18px;';
-      var nets = [['bep20', 'BEP20 ($1)'], ['trc20', 'TRC20 ($5)']];
-      if (!wl.bep20.qr && !wl.trc20.qr && qr) wl.bep20 = { addr: '', qr: qr, at: '' };
+      var nets = [['bep20', 'BEP20 ($1)', 'BSC'], ['trc20', 'TRC20 ($5)', 'TRC20']];
+      if (!wl.bep20.qr && !wl.trc20.qr && qr) {
+        var la = wl.legacy || '';
+        var lw = { addr: la, qr: qr, at: '' };
+        wl = la.indexOf('0x') === 0 ? { bep20: lw, trc20: wl.trc20 } : { bep20: wl.bep20, trc20: lw };
+      }
       nets.forEach(function(n) {
         var w = wl[n[0]];
         var col = document.createElement('div');
-        col.style.cssText = 'min-width:170px; max-width:260px;';
+        var picked = selNet === n[2];
+        col.title = 'Click to pay via ' + n[1];
+        col.style.cssText = 'min-width:170px; max-width:260px; padding:8px 10px; border-radius:10px; cursor:pointer; border:2px solid ' + (picked ? '#10b981' : '#374151') + '; background:' + (picked ? 'rgba(16,185,129,0.12)' : 'transparent') + ';';
+        col.onclick = (function(net) {
+          return function(e) { e.stopPropagation(); e.preventDefault(); pickNet(net); };
+        })(n[2]);
         var label = document.createElement('div');
-        label.style.cssText = 'font-size:12px; color:#9ca3af; margin-bottom:4px; font-weight:600;';
-        label.textContent = 'Wallet QR ' + n[1];
+        label.style.cssText = 'font-size:12px; color:' + (picked ? '#34d399' : '#9ca3af') + '; margin-bottom:4px; font-weight:600;';
+        label.textContent = (picked ? '\u25cf ' : '\u25cb ') + 'Wallet ' + n[1] + (picked ? ' \u2014 selected' : '');
         col.appendChild(label);
         if (w.qr) {
           var full = buildWalletQrUrl(w.qr);
@@ -643,13 +654,18 @@
           img.src = full;
           img.alt = 'Wallet QR ' + n[0].toUpperCase();
           img.style.cssText = 'max-width:160px; max-height:160px; border-radius:8px; border:1px solid #374151; background:#fff; padding:4px; display:block; cursor:zoom-in;';
-          img.onclick = (function(cardEl, emailKey, url) {
+          img.onclick = (function(cardEl, emailKey, url, net, addr) {
             return function(e) {
               e.stopPropagation();
               e.preventDefault();
-              showQrModal(url, extractNetPayout(cardEl), emailKey);
+              pickNet(net);
+              setTimeout(function() {
+                var c = curCard(emailKey);
+                var netText = c ? ('$' + Number(c.payout).toFixed(2) + ' USDT') : extractNetPayout(cardEl);
+                showQrModal(url, netText, emailKey, (c && c.wallet) || addr);
+              }, 80);
             };
-          })(card, email.toLowerCase(), full);
+          })(card, email.toLowerCase(), full, n[2], w.addr);
           col.appendChild(meta);
           col.appendChild(img);
         } else {
@@ -658,11 +674,70 @@
           none.textContent = 'Not uploaded yet';
           col.appendChild(none);
         }
+        if (w.addr) {
+          var cp = document.createElement('button');
+          cp.type = 'button';
+          cp.textContent = 'Copy address';
+          cp.style.cssText = 'margin-top:8px; padding:4px 10px; font-size:12px; border-radius:6px; border:1px solid #4b5563; background:#1f2937; color:#e5e7eb; cursor:pointer;';
+          cp.onclick = (function(addr, btn) {
+            return function(e) {
+              e.stopPropagation();
+              e.preventDefault();
+              copyText(addr, function(ok) {
+                btn.textContent = ok ? 'Address copied' : 'Copy failed';
+                btn.style.color = ok ? '#34d399' : '#f87171';
+                setTimeout(function() { btn.textContent = 'Copy address'; btn.style.color = '#e5e7eb'; }, 1800);
+              });
+            };
+          })(w.addr, cp);
+          col.appendChild(cp);
+        }
         box.appendChild(col);
       });
       panel.insertBefore(box, panel.firstChild);
     });
   }
+
+  function copyText(text, done) {
+    function fallback() {
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.cssText = 'position:fixed; top:-1000px; opacity:0;';
+      document.body.appendChild(ta);
+      ta.select();
+      var ok = false;
+      try { ok = document.execCommand('copy'); } catch (e) {}
+      document.body.removeChild(ta);
+      done(ok);
+    }
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(function() { done(true); }, fallback);
+    } else {
+      fallback();
+    }
+  }
+
+  // === Bridge to the Approved & Pay card state exposed by the compiled bundle ===
+  function curCard(email) {
+    var c = window.__tpCur;
+    if (!c || !email || String(c.email || '').toLowerCase() !== String(email).toLowerCase()) return null;
+    return c;
+  }
+  function pickNet(net) {
+    if (typeof window.__tpPickNet === 'function') window.__tpPickNet(net);
+  }
+  window.__tpDefNet = function(u) {
+    var saved = calc.net[u.user_id];
+    if (saved === 'BEP20' && u.bep20_address) return 'BSC';
+    if (saved === 'TRC20' && u.trc20_address) return 'TRC20';
+    if (u.trc20_address) return 'TRC20';
+    if (u.bep20_address) return 'BSC';
+    var w = u.user_wallet_address || (u.payments && u.payments[0] && u.payments[0].effective_wallet) || '';
+    return w.indexOf('0x') === 0 ? 'BSC' : 'TRC20';
+  };
+  window.__tpInitSel = function(u) {
+    return (u.payments || []).filter(function(p) { return calc.sel[p.id]; }).map(function(p) { return p.id; });
+  };
 
   // === Revert Claim buttons (revert an approved+unpaid claim by payment id) ===
   function revertClaim(paymentId, btn) {
@@ -699,35 +774,31 @@
     });
   }
 
-  // Mark the TICKED approved claims as paid manually (settlement, no CoinEx).
+  // Mark the claims ticked in the card above as paid manually (settlement, no CoinEx),
+  // using the same selection, network fee and wallet that produce the card's Net Payout.
   function markPaidTrust(email, btn) {
     var key = email.toLowerCase();
-    var box = btn.closest ? btn.closest('.claim-revert-box') : null;
-    var paymentIds = [];
-    var labels = [];
-    if (box) {
-      var cbs = box.querySelectorAll('.trust-claim-cb');
-      for (var i = 0; i < cbs.length; i++) {
-        if (cbs[i].checked) {
-          paymentIds.push(parseInt(cbs[i].getAttribute('data-pid'), 10));
-          labels.push(cbs[i].getAttribute('data-label'));
-        }
-      }
-    }
-    if (!paymentIds.length) { alert('Tick at least one claim to mark paid.'); return; }
-    var userId = userIdCache[key];
-    if (!userId) { alert('User not found: ' + email); return; }
-
-    // All ungrouped prior payouts (TRUST, CoinEx, Direct Pay) are absorbed into this settlement
-    // so no leftover negative balance remains for the user.
-    var priors = adminPaidByEmail[key] || [];
-    var dedIds = priors.filter(function(l) {
-      return !l.payout_group_id;
-    }).map(function(l) { return l.id; });
-
-    var msg = 'Mark ' + paymentIds.length + ' TICKED approved claim(s) as PAID (manual, description "TRUST") for ' + email + '?\n\n' + labels.join('\n');
-    if (dedIds.length) msg += '\n\nThis will also clear ' + dedIds.length + ' prior payout record(s) so no negative balance remains.';
-    msg += '\n\nThese claims will be considered paid and will no longer appear in Approved & Pay.';
+    var cur = curCard(key);
+    if (!cur) { alert('Open this person\'s card first.'); return; }
+    var paymentIds = cur.payment_ids.slice();
+    if (!paymentIds.length) { alert('Tick at least one payment in the card to mark paid.'); return; }
+    var userId = cur.user_id;
+    var dedIds = cur.ded_ids.slice();
+    var byId = {};
+    (paymentsByEmail[key] || []).forEach(function(p) { byId[p.id] = p; });
+    var labels = paymentIds.map(function(id) {
+      var p = byId[id];
+      if (!p) return '#' + id;
+      var amt = (p.approved_amount !== undefined ? p.approved_amount : p.amount);
+      return '#' + id + ' ' + Number(amt).toFixed(2) + ' ' + (p.approved_currency || p.currency || 'USD');
+    });
+    var netName = cur.net === 'BSC' ? 'BEP20' : 'TRC20';
+    var msg = 'Mark ' + paymentIds.length + ' ticked payment(s) as PAID (manual, "TRUST") for ' + email + '?\n\n' + labels.join('\n') +
+      '\n\nGross: $' + Number(cur.gross).toFixed(2) + '\nCommission: -$' + Number(cur.comm).toFixed(2) +
+      '\nTransfer fee (' + netName + '): -$' + Number(cur.fee).toFixed(2) +
+      (dedIds.length ? '\nPrior payouts (' + dedIds.length + '): -$' + Number(cur.ded).toFixed(2) : '') +
+      '\nNet: $' + Number(cur.payout).toFixed(2) + ' USDT' + (cur.wallet ? '\nWallet: ' + cur.wallet : '') +
+      '\n\nUnticked payments stay in Approved & Pay.';
     if (!confirm(msg)) return;
 
     btn.disabled = true;
@@ -743,7 +814,9 @@
         deduction_log_ids: dedIds,
         manual: true,
         description: 'TRUST',
-        exchange_fee: 0
+        exchange_fee: cur.fee,
+        wallet_address: cur.wallet || '',
+        chain: cur.net
       })
     })
     .then(function(r) { return r.json(); })
@@ -805,7 +878,7 @@
       header.style.cssText = 'display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px;';
       var label = document.createElement('div');
       label.style.cssText = 'font-size:12px; color:#9ca3af; font-weight:600;';
-      label.textContent = 'Approved claims (tick the ones to pay)';
+      label.textContent = 'Approved claims \u2014 Mark Paid (TRUST) settles only the ones ticked in the card below';
 
       var payBtn = document.createElement('button');
       payBtn.className = 'mark-paid-trust-btn';
@@ -828,23 +901,12 @@
         var amt = (p.approved_amount !== undefined ? p.approved_amount : p.amount);
         var cur = (p.approved_currency || p.currency || 'USD');
 
-        var left = document.createElement('label');
-        left.style.cssText = 'display:flex; align-items:center; gap:8px; min-width:0; cursor:pointer;';
-        var cb = document.createElement('input');
-        cb.type = 'checkbox';
-        cb.className = 'trust-claim-cb';
-        cb.checked = tickState[p.id] !== false;
-        cb.setAttribute('data-pid', p.id);
-        cb.setAttribute('data-label', '#' + p.id + ' ' + Number(amt).toFixed(2) + ' ' + cur);
-        cb.onchange = (function(pid) {
-          return function() { tickState[pid] = this.checked; };
-        })(p.id);
-        cb.style.cssText = 'width:15px; height:15px; flex-shrink:0; cursor:pointer;';
+        var left = document.createElement('div');
+        left.style.cssText = 'display:flex; align-items:center; gap:8px; min-width:0;';
         var info = document.createElement('div');
         info.style.cssText = 'font-size:12px; color:#d1d5db; min-width:0;';
         var txPart = p.matched_tx_id ? (' · tx ' + p.matched_tx_id) : '';
         info.textContent = '#' + p.id + ' · ' + (p.payment_method || '') + ' · ' + Number(amt).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}) + ' ' + cur + txPart;
-        left.appendChild(cb);
         left.appendChild(info);
 
         var rbtn = document.createElement('button');
@@ -1265,6 +1327,11 @@
         cacheBuilt = false;
       }
       approvedWasVisible = approvedVisible;
+      var tc = window.__tpCur;
+      if (tc && approvedVisible) {
+        var tn = tc.net === 'BSC' ? 'BEP20' : 'TRC20';
+        if (calc.net[tc.user_id] !== tn) { calc.net[tc.user_id] = tn; calcSave(); }
+      }
       injectBalanceBadge();
       injectLoginButtons();
       injectWalletEdit();
@@ -1278,6 +1345,9 @@
 
   function init() {
     observer.observe(document.body, { childList: true, subtree: true });
+    // Network/selection changes in the card only update text and classes (no childList
+    // mutation), so refresh the wallet highlight after any click.
+    document.addEventListener('click', function() { setTimeout(injectWalletQr, 150); }, true);
     buildUserIdCache();
     injectBalanceBadge();
     injectLoginButtons();

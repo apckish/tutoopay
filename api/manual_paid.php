@@ -54,7 +54,7 @@ $admin_user = $_SESSION['admin_username'] ?? 'admin';
 $user_name = $payment['full_name'] ?? '';
 $user_email = $payment['email'] ?? '';
 $user_id = intval($payment['user_id']);
-$wallet = $payment['wallet_address'] ?: ($payment['user_wallet'] ?? '');
+$wallet = trim($body['wallet_address'] ?? '') ?: ($payment['wallet_address'] ?: ($payment['user_wallet'] ?? ''));
 $usdt_amount = $payout_amount;
 $matched_tx_id = $payment['matched_tx_id'] ?? '';
 
