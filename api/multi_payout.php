@@ -17,8 +17,9 @@ $manual = !empty($body['manual']);
 $description = trim($body['description'] ?? '');
 
 if ($manual) {
-    // Manual settlement (no CoinEx): no exchange fee, description required.
-    $exchange_fee = 0.0;
+    // Manual settlement (no CoinEx): description required; fee only if the caller sends one
+    // (the network transfer fee the admin actually paid when sending outside CoinEx).
+    if (!isset($body['exchange_fee'])) $exchange_fee = 0.0;
     if (!$description) {
         json_error('Description is required for manual payment');
     }
