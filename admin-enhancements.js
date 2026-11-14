@@ -99,7 +99,8 @@
   function pickWallets(o) {
     return {
       bep20: { addr: o.bep20_address || '', qr: o.bep20_qr_url || '', at: o.bep20_updated_at || '' },
-      trc20: { addr: o.trc20_address || '', qr: o.trc20_qr_url || '', at: o.trc20_updated_at || '' }
+      trc20: { addr: o.trc20_address || '', qr: o.trc20_qr_url || '', at: o.trc20_updated_at || '' },
+      legacy: o.user_wallet_address || o.wallet_address || ''
     };
   }
 
@@ -626,7 +627,11 @@
       box.setAttribute('data-qr', sig);
       box.style.cssText = 'margin:0 16px 14px; padding:12px 0; border-bottom:1px solid #374151; display:flex; flex-wrap:wrap; gap:18px;';
       var nets = [['bep20', 'BEP20 ($1)', 'BSC'], ['trc20', 'TRC20 ($5)', 'TRC20']];
-      if (!wl.bep20.qr && !wl.trc20.qr && qr) wl.bep20 = { addr: '', qr: qr, at: '' };
+      if (!wl.bep20.qr && !wl.trc20.qr && qr) {
+        var la = wl.legacy || '';
+        var lw = { addr: la, qr: qr, at: '' };
+        wl = la.indexOf('0x') === 0 ? { bep20: lw, trc20: wl.trc20 } : { bep20: wl.bep20, trc20: lw };
+      }
       nets.forEach(function(n) {
         var w = wl[n[0]];
         var col = document.createElement('div');
